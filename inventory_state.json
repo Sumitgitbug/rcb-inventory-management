@@ -1,0 +1,133 @@
+{
+  "assets": [],
+  "catalog": {
+    "categoriesByType": {
+      "Engineering": [
+        {
+          "code": "MS",
+          "label": "Maintenance Services"
+        },
+        {
+          "code": "LD",
+          "label": "Land"
+        },
+        {
+          "code": "SD",
+          "label": "Site Development"
+        },
+        {
+          "code": "BL",
+          "label": "Buildings"
+        },
+        {
+          "code": "PM",
+          "label": "Plant and Machinery"
+        },
+        {
+          "code": "EI",
+          "label": "Electrical Installation"
+        },
+        {
+          "code": "TW",
+          "label": "Tube Wells and Water Supply System"
+        },
+        {
+          "code": "CWP",
+          "label": "Capital Work-in-Progress"
+        }
+      ],
+      "IT": [
+        {
+          "code": "PC",
+          "label": "Computers/Peripherals"
+        },
+        {
+          "code": "OE",
+          "label": "Office Equipment"
+        },
+        {
+          "code": "AV",
+          "label": "Audio Visual Equipment"
+        },
+        {
+          "code": "SW",
+          "label": "Software"
+        },
+        {
+          "code": "IA",
+          "label": "Intangible Assets"
+        }
+      ],
+      "Scientific": [
+        {
+          "code": "LS",
+          "label": "Laboratory and Scientific Equipment"
+        },
+        {
+          "code": "EQ",
+          "label": "Equipments"
+        },
+        {
+          "code": "AV",
+          "label": "Audio Visual Equipment"
+        },
+        {
+          "code": "VH",
+          "label": "Vehicles"
+        },
+        {
+          "code": "MSC",
+          "label": "Misc"
+        }
+      ],
+      "Store": [
+        {
+          "code": "EQ",
+          "label": "Equipments"
+        },
+        {
+          "code": "FF",
+          "label": "Furniture, Fixtures and Fittings"
+        },
+        {
+          "code": "SP",
+          "label": "Sports Equipment"
+        },
+        {
+          "code": "LB",
+          "label": "Library Books and Scientific Journals"
+        },
+        {
+          "code": "MSC",
+          "label": "Misc"
+        }
+      ]
+    },
+    "types": [
+      {
+        "code": "IT",
+        "label": "IT",
+        "value": "IT"
+      },
+      {
+        "code": "STO",
+        "label": "Store",
+        "value": "Store"
+      },
+      {
+        "code": "ENG",
+        "label": "Engineering",
+        "value": "Engineering"
+      },
+      {
+        "code": "SCI",
+        "label": "Scientific",
+        "value": "Scientific"
+      }
+    ]
+  },
+  "counters": {},
+  "employees": [],
+  "issues": [],
+  "notes": []
+}
