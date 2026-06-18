@@ -31,7 +31,7 @@ MYSQL_CONFIG = {
     "host": os.getenv("MYSQL_HOST", "127.0.0.1"),
     "port": _env_int("MYSQL_PORT", 3306),
     "user": os.getenv("MYSQL_USER", "root"),
-    "password": os.getenv("MYSQL_PASSWORD", "Sumit@123"),
+    "password": os.getenv("MYSQL_PASSWORD", ""),
     "database": os.getenv("MYSQL_DATABASE", "inventory_management"),
     "autocommit": False,
 }
