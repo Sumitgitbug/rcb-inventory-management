@@ -37,7 +37,6 @@ function AssetListPanel({
                 <th className="px-3 py-2 font-medium">ID</th>
                 <th className="px-3 py-2 font-medium">Type/Category/Sub Category</th>
                 <th className="px-3 py-2 font-medium">Make/Model</th>
-                <th className="px-3 py-2 font-medium text-center">Qty</th>
                 <th className="px-3 py-2 font-medium">Serial</th>
                 <th className="px-3 py-2 font-medium">Invoice</th>
                 <th className="px-3 py-2 font-medium">Dates</th>
@@ -58,7 +57,6 @@ function AssetListPanel({
                       <div className="text-slate-900">{asset.make || "-"}</div>
                       <div className="text-xs text-slate-500">{asset.model || "-"}</div>
                     </td>
-                    <td className="px-3 py-2 text-center font-semibold text-slate-900">{asset.availableQuantity ?? (asset.quantity || 1)}</td>
                     <td className="px-3 py-2">
                       {(asset.serialNumbers ?? []).map((s) => (
                         <div key={s} className="mb-1 rounded bg-slate-50 px-1.5 py-0.5 text-xs">
@@ -92,7 +90,7 @@ function AssetListPanel({
                           <span className="font-semibold">S:</span> {formatDate(asset.supplyDate)}
                         </div>
                         <div>
-                          <span className="font-semibold">W:</span> {formatDate(asset.purchaseDate)}
+                          <span className="font-semibold">W:</span> {formatDate(asset.warrantyDate || asset.purchaseDate)}
                         </div>
                       </div>
                     </td>
@@ -117,7 +115,7 @@ function AssetListPanel({
                 ))
               ) : (
                 <tr>
-                  <td colSpan={8} className="px-3 py-8 text-center text-sm text-slate-500">
+                  <td colSpan={7} className="px-3 py-8 text-center text-sm text-slate-500">
                     No assets found.
                   </td>
                 </tr>

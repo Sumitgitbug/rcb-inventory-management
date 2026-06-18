@@ -3,6 +3,8 @@
 /node_modules
 /build
 /tmp
+/uploads1
+/uploads
 
 # Logs
 logs
@@ -18,6 +20,16 @@ lerna-debug.log*
 .env.development
 .env.test
 .env.production
+
+# local db
+inventory.db
+
+# Python generated files
+__pycache__/
+*.py[cod]
+
+# Windows shortcuts
+*.lnk
 
 # temp directory
 .temp

@@ -15,15 +15,47 @@ import {
   getTypeOptions,
   normalizeCatalog,
 } from "@/data/inventoryCatalog"
-import { formatDate, generateAssetId, loadInventoryState, saveInventoryState } from "@/lib/inventory"
+import { generateAssetId, loadInventoryState, saveInventoryState } from "@/lib/inventory"
 import { ActionButton, StatCard, SectionShell } from "@/components/dashboard-ui"
 import AssetsSection from "@/components/AssetsSection"
+import INoteSection from "@/components/INoteSection"
 import StocksSection from "@/components/StocksSection"
 import EmployeesSection from "@/components/EmployeesSection"
 import IssueReturnSection from "@/components/IssueReturnSection"
 
+const ACTIVE_SECTION_STORAGE_KEY = "inventory.activeSection"
+const SECTION_IDS = new Set(["dashboard", "assets", "stocks", "employees", "i-note", "issue-return"])
+
+function readInitialSection() {
+  if (typeof window === "undefined") return "dashboard"
+  const hashSection = String(window.location.hash || "").replace(/^#/, "").trim()
+  if (SECTION_IDS.has(hashSection)) return hashSection
+  const storedSection = window.localStorage.getItem(ACTIVE_SECTION_STORAGE_KEY)
+  if (SECTION_IDS.has(storedSection)) return storedSection
+  return "dashboard"
+}
+
 function todayISO() {
   return new Date().toISOString().slice(0, 10)
+}
+
+function normalizeDateForInput(value) {
+  const text = String(value || "").trim()
+  if (!text) return ""
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text
+
+  const parsed = new Date(text)
+  if (!Number.isNaN(parsed.getTime())) {
+    return parsed.toISOString().slice(0, 10)
+  }
+
+  const match = text.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/)
+  if (match) {
+    const [, day, month, year] = match
+    return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`
+  }
+
+  return ""
 }
 
 function emptyAssetForm(catalog) {
@@ -37,24 +69,21 @@ function emptyAssetForm(catalog) {
     make: "",
     model: "",
     quantity: 1,
-    useSerialNumbers: true,
+    useSerialNumbers: false,
     serialNumbers: [""],
     invoiceNo: "",
     invoiceFile: null,
     invoiceFileName: "",
     invoiceFileType: "",
     purchaseDate: todayISO(),
+    warrantyDate: "",
     orderDate: "",
     supplyDate: "",
   }
 }
 
 function emptyEmployeeForm() {
-  return {
-    code: "",
-    name: "",
-    email: "",
-  }
+  return { code: "", name: "", email: "" }
 }
 
 function emptyIssueForm(assetId = "") {
@@ -77,21 +106,22 @@ function normalizeIssueStatus(status) {
   return String(status || "").trim().toLowerCase()
 }
 
-function emptyNoteForm() {
-  return {
-    inoteDate: todayISO(),
-    invoiceNo: "",
-    orderNo: "",
-    orderDate: "",
-    indentorName: "",
-    supplierName: "",
-  }
-}
-
 function normalizeSerials(values, quantity) {
   const serials = [...values]
   while (serials.length < quantity) serials.push("")
   return serials.slice(0, quantity)
+}
+
+function normalizeSerialKey(value) {
+  return String(value || "").trim().toLowerCase()
+}
+
+function readINoteItemValue(item, keys) {
+  for (const key of keys) {
+    const value = item?.[key]
+    if (value !== undefined && value !== null && String(value).trim() !== "") return String(value).trim()
+  }
+  return ""
 }
 
 function buildIssueCounts(issues) {
@@ -128,35 +158,16 @@ async function toDataUrl(file) {
   })
 }
 
-function generateNoteId(inventory) {
-  const year = new Date().getFullYear().toString().slice(-2)
-  const noteCounters = inventory.counters?.noteCounter ?? 0
-  const nextCounter = noteCounters + 1
-  const noteId = `RCB/INOTE/${year}/${String(nextCounter).padStart(3, '0')}`
-  return { noteId, nextCounter }
-}
-
 function escapeCsvCell(value) {
   return `"${String(value ?? "").replace(/"/g, '""')}"`
 }
 
 function buildAssetsCsv(assets, catalog) {
   const headers = [
-    "assetId",
-    "type",
-    "category",
-    "subCategory",
-    "make",
-    "model",
-    "quantity",
-    "serialNumbers",
-    "invoiceNo",
-    "purchaseDate",
-    "orderDate",
-    "supplyDate",
-    "availableQuantity",
+    "assetId", "type", "category", "subCategory", "make", "model",
+    "quantity", "serialNumbers", "invoiceNo", "purchaseDate",
+    "warrantyDate", "orderDate", "supplyDate", "availableQuantity",
   ]
-
   const rows = assets.map((asset) => [
     asset.assetId,
     getTypeLabel(catalog, asset.type),
@@ -168,14 +179,16 @@ function buildAssetsCsv(assets, catalog) {
     (asset.serialNumbers ?? []).filter(Boolean).join("|"),
     asset.invoiceNo || "",
     asset.purchaseDate || "",
+    asset.warrantyDate || "",
     asset.orderDate || "",
     asset.supplyDate || "",
     asset.availableQuantity ?? "",
   ])
+  return [headers, ...rows].map((row) => row.map(escapeCsvCell).join(",")).join("\n")
+}
 
-  return [headers, ...rows]
-    .map((row) => row.map(escapeCsvCell).join(","))
-    .join("\n")
+function buildStocksCsv(assets, catalog) {
+  return buildAssetsCsv(assets, catalog)
 }
 
 function downloadTextFile(filename, content, mimeType = "text/plain;charset=utf-8") {
@@ -191,7 +204,7 @@ function downloadTextFile(filename, content, mimeType = "text/plain;charset=utf-
 function InventoryDashboard() {
   const initial = loadInventoryState()
   const [inventory, setInventory] = useState(initial)
-  const [activeSection, setActiveSection] = useState("dashboard")
+  const [activeSection, setActiveSection] = useState(readInitialSection)
   const [searchTerm, setSearchTerm] = useState("")
   const [stocksSearchTerm, setStocksSearchTerm] = useState("")
   const [activeStocksTab, setActiveStocksTab] = useState("IT")
@@ -201,13 +214,12 @@ function InventoryDashboard() {
   const [assetModalOpen, setAssetModalOpen] = useState(false)
   const [employeeModalOpen, setEmployeeModalOpen] = useState(false)
   const [issueModalOpen, setIssueModalOpen] = useState(false)
-  const [noteModalOpen, setNoteModalOpen] = useState(false)
-  const [noteForm, setNoteForm] = useState(emptyNoteForm())
   const [invoicePreview, setInvoicePreview] = useState(null)
   const [catalogModal, setCatalogModal] = useState(null)
   const [editingAssetId, setEditingAssetId] = useState(null)
   const [editingEmployeeId, setEditingEmployeeId] = useState(null)
   const [editingIssueId, setEditingIssueId] = useState(null)
+  const [assetPrefillSource, setAssetPrefillSource] = useState(null)
   const [toast, setToast] = useState(null)
   const [assetForm, setAssetForm] = useState(emptyAssetForm(initial.catalog ?? createDefaultCatalog()))
   const [employeeForm, setEmployeeForm] = useState(emptyEmployeeForm())
@@ -223,22 +235,41 @@ function InventoryDashboard() {
   )
 
   useEffect(() => {
-    let cancelled = false
+    if (typeof window === "undefined") return
+    window.localStorage.setItem(ACTIVE_SECTION_STORAGE_KEY, activeSection)
+    const nextUrl = new URL(window.location.href)
+    nextUrl.hash = activeSection === "dashboard" ? "" : activeSection
+    window.history.replaceState({}, "", `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`)
+  }, [activeSection])
 
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    const syncSectionFromLocation = () => {
+      const nextHash = String(window.location.hash || "").replace(/^#/, "").trim()
+      if (SECTION_IDS.has(nextHash) && nextHash !== activeSection) {
+        setActiveSection(nextHash)
+      }
+    }
+    window.addEventListener("hashchange", syncSectionFromLocation)
+    window.addEventListener("popstate", syncSectionFromLocation)
+    return () => {
+      window.removeEventListener("hashchange", syncSectionFromLocation)
+      window.removeEventListener("popstate", syncSectionFromLocation)
+    }
+  }, [activeSection])
+
+  useEffect(() => {
+    let cancelled = false
     async function hydrate() {
       const cached = loadInventoryState()
       setInventory(cached)
-
       const remote = await loadInventoryFromApi()
       if (cancelled) return
       if (hasMeaningfulInventoryState(remote)) setInventory(remote)
       setHydrated(true)
     }
-
     hydrate()
-    return () => {
-      cancelled = true
-    }
+    return () => { cancelled = true }
   }, [])
 
   useEffect(() => {
@@ -258,6 +289,7 @@ function InventoryDashboard() {
   const issues = useMemo(() => inventory.issues ?? [], [inventory.issues])
   const notes = useMemo(() => inventory.notes ?? [], [inventory.notes])
   const issueCounts = useMemo(() => buildIssueCounts(issues), [issues])
+
   const assetAvailability = useMemo(() => {
     const availability = new Map()
     assets.forEach((asset) => {
@@ -267,54 +299,52 @@ function InventoryDashboard() {
     })
     return availability
   }, [assets, issueCounts])
+
   const assetsWithAvailability = useMemo(
-    () =>
-      assets.map((asset) => ({
-        ...asset,
-        availableQuantity: assetAvailability.get(asset.assetId) ?? 0,
-      })),
+    () => assets.map((asset) => ({ ...asset, availableQuantity: assetAvailability.get(asset.assetId) ?? 0 })),
     [assets, assetAvailability],
   )
+
   const stockAssets = useMemo(
     () => assetsWithAvailability.filter((asset) => (asset.availableQuantity ?? 0) > 0),
     [assetsWithAvailability],
   )
+
   const availableIssueAssets = useMemo(() => stockAssets, [stockAssets])
+
   const issueAssetById = useMemo(
     () => new Map(assets.map((asset) => [asset.assetId, asset])),
     [assets],
   )
+
   const stockQuantityTotal = useMemo(
     () => stockAssets.reduce((total, asset) => total + (Number(asset.availableQuantity ?? 0) || 0), 0),
     [stockAssets],
   )
+
   const assetSubCategoryOptions = getSubCategoriesForTypeAndCategory(catalog, assetForm.type, assetForm.category)
 
   const filteredAssets = useMemo(() => {
     if (!showAssetDropdown) return []
     const term = assetSearchTerm.toLowerCase()
     if (!term) return availableIssueAssets
-    return availableIssueAssets.filter((asset) => {
-      return (
-        asset.assetId.toLowerCase().includes(term) ||
-        asset.subCategory?.toLowerCase().includes(term) ||
-        asset.model?.toLowerCase().includes(term) ||
-        asset.make?.toLowerCase().includes(term)
-      )
-    })
+    return availableIssueAssets.filter((asset) =>
+      asset.assetId.toLowerCase().includes(term) ||
+      asset.subCategory?.toLowerCase().includes(term) ||
+      asset.model?.toLowerCase().includes(term) ||
+      asset.make?.toLowerCase().includes(term)
+    )
   }, [assetSearchTerm, showAssetDropdown, availableIssueAssets])
 
   const filteredEmployees = useMemo(() => {
     if (!showEmployeeDropdown) return []
     const term = employeeSearchTerm.toLowerCase()
     if (!term) return employees
-    return employees.filter((emp) => {
-      return (
-        emp.code.toLowerCase().includes(term) ||
-        emp.name?.toLowerCase().includes(term) ||
-        emp.email?.toLowerCase().includes(term)
-      )
-    })
+    return employees.filter((emp) =>
+      emp.code.toLowerCase().includes(term) ||
+      emp.name?.toLowerCase().includes(term) ||
+      emp.email?.toLowerCase().includes(term)
+    )
   }, [employeeSearchTerm, showEmployeeDropdown, employees])
 
   const counts = {
@@ -322,28 +352,18 @@ function InventoryDashboard() {
     assets: assets.length,
     stocks: stockQuantityTotal,
     employees: employees.length,
+    "i-note": notes.length,
     "issue-return": issues.length,
-    inote: notes.length,
   }
-
 
   const filteredStocks = useMemo(() => {
     const term = stocksSearchTerm.trim().toLowerCase()
-    // Filter by active tab type first, then search term
     const tabFiltered = stockAssets.filter((asset) => asset.type === activeStocksTab)
     const sorted = [...tabFiltered].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
     if (!term) return sorted
     return sorted.filter((asset) => {
       const serialText = (asset.serialNumbers ?? []).join(" ").toLowerCase()
-      return [
-        asset.category,
-        asset.subCategory,
-        asset.make,
-        asset.model,
-        serialText,
-        asset.invoiceNo,
-        asset.assetId,
-      ]
+      return [asset.category, asset.subCategory, asset.make, asset.model, serialText, asset.invoiceNo, asset.assetId]
         .filter(Boolean)
         .some((value) => value.toLowerCase().includes(term))
     })
@@ -351,8 +371,46 @@ function InventoryDashboard() {
 
   function openAssetModal() {
     setEditingAssetId(null)
+    setAssetPrefillSource(null)
     setAssetForm(emptyAssetForm(catalog))
     setAssetModalOpen(true)
+  }
+
+  function openAssetModalFromINote(prefill) {
+    const quantity = Math.max(1, Math.floor(Number(prefill?.quantity) || 1))
+    const itemDescription =
+      String(prefill?.itemDescription || "").trim() ||
+      readINoteItemValue(prefill?.item, ["item_desc", "description", "item_description", "desc", "particulars"])
+    const orderDate = normalizeDateForInput(prefill?.orderDate || prefill?.noteMeta?.order_dt)
+    const supplyDate = normalizeDateForInput(
+      prefill?.supplyDate || prefill?.deliveryDate || prefill?.detail?.supply_date || prefill?.detail?.delivery_date,
+    )
+    const invoiceNo = String(prefill?.invoiceNo || "").trim()
+    const baseForm = emptyAssetForm(catalog)
+
+    setEditingAssetId(null)
+    setAssetPrefillSource({
+      noteNo: prefill?.noteNo || "",
+      itemDescription,
+      quantity,
+      orderNo: prefill?.orderNo || "",
+      invoiceNo,
+      orderDate,
+      supplyDate,
+    })
+    setAssetForm({
+      ...baseForm,
+      quantity,
+      serialNumbers: [],
+      useSerialNumbers: false,
+      model: itemDescription,
+      invoiceNo,
+      orderDate,
+      supplyDate,
+      purchaseDate: orderDate || supplyDate || baseForm.purchaseDate,
+    })
+    setAssetModalOpen(true)
+    showSuccess("I-Note item linked to Add Asset form.")
   }
 
   function openEmployeeModal() {
@@ -375,6 +433,7 @@ function InventoryDashboard() {
 
   function openEditAssetModal(asset) {
     setEditingAssetId(asset.assetId)
+    setAssetPrefillSource(null)
     const hasSerialNumbers = (asset.serialNumbers ?? []).some((serial) => String(serial || "").trim())
     setAssetForm({
       type: asset.type || "IT",
@@ -390,6 +449,7 @@ function InventoryDashboard() {
       invoiceFileName: asset.invoiceFileName || "",
       invoiceFileType: asset.invoiceFileType || "",
       purchaseDate: asset.purchaseDate || todayISO(),
+      warrantyDate: asset.warrantyDate || "",
       orderDate: asset.orderDate || "",
       supplyDate: asset.supplyDate || "",
     })
@@ -398,11 +458,7 @@ function InventoryDashboard() {
 
   function openEditEmployeeModal(employee) {
     setEditingEmployeeId(employee.id)
-    setEmployeeForm({
-      code: employee.code || "",
-      name: employee.name || "",
-      email: employee.email || "",
-    })
+    setEmployeeForm({ code: employee.code || "", name: employee.name || "", email: employee.email || "" })
     setEmployeeModalOpen(true)
   }
 
@@ -432,20 +488,17 @@ function InventoryDashboard() {
     setCatalogModal({ target, value: "" })
   }
 
-  function showSuccess(message) {
-    setToast({ type: "success", message })
-  }
+  function showSuccess(message) { setToast({ id: Date.now(), type: "success", message }) }
+  function showError(message) { setToast({ id: Date.now(), type: "error", message }) }
 
   function addCatalogOption() {
     const nextValue = String(catalogModal?.value || "").trim()
     if (!nextValue) return
-
     const nextCatalog = catalogModal?.target === "type"
       ? addCatalogType(catalog, nextValue)
       : catalogModal?.target === "category"
         ? addCatalogCategory(catalog, assetForm.type, nextValue)
         : addCatalogSubCategory(catalog, assetForm.type, assetForm.category, nextValue)
-
     setInventory((current) => ({ ...current, catalog: nextCatalog }))
     setAssetForm((current) => {
       if (catalogModal?.target === "type") {
@@ -470,6 +523,7 @@ function InventoryDashboard() {
       return current
     })
     setCatalogModal(null)
+    showSuccess("Catalog option added successfully.")
   }
 
   function handleIssueAssetChange(nextAssetId) {
@@ -478,7 +532,6 @@ function InventoryDashboard() {
       ...current,
       assetId: nextAssetId,
       subCategory: nextAsset?.subCategory || "",
-      // Each asset now has exactly 1 serial number ” auto-fill it
       serialNumber: nextAsset?.serialNumbers?.[0] || "",
     }))
   }
@@ -513,10 +566,7 @@ function InventoryDashboard() {
   }
 
   function handleAssetSubCategoryChange(nextSubCategory) {
-    setAssetForm((current) => ({
-      ...current,
-      subCategory: nextSubCategory,
-    }))
+    setAssetForm((current) => ({ ...current, subCategory: nextSubCategory }))
   }
 
   function handleAssetQuantityChange(value) {
@@ -548,15 +598,9 @@ function InventoryDashboard() {
 
   async function handleAssetFileChange(file) {
     if (!file) {
-      setAssetForm((current) => ({
-        ...current,
-        invoiceFile: null,
-        invoiceFileName: "",
-        invoiceFileType: "",
-      }))
+      setAssetForm((current) => ({ ...current, invoiceFile: null, invoiceFileName: "", invoiceFileType: "" }))
       return
     }
-
     const dataUrl = await toDataUrl(file)
     setAssetForm((current) => ({
       ...current,
@@ -568,18 +612,36 @@ function InventoryDashboard() {
 
   function submitAssetForm(event) {
     event.preventDefault()
-
     const quantity = Math.max(1, Number(assetForm.quantity) || 1)
     const useSerialNumbers = Boolean(assetForm.useSerialNumbers)
     const serialNumbers = useSerialNumbers
-      ? normalizeSerials(assetForm.serialNumbers, quantity).map((serial) => serial.trim())
+      ? normalizeSerials(assetForm.serialNumbers ?? [], quantity).map((serial) => serial.trim())
       : []
+    const enteredSerialNumbers = serialNumbers.filter((serial) => normalizeSerialKey(serial))
+    const serialKeys = enteredSerialNumbers.map(normalizeSerialKey)
 
-    if (useSerialNumbers && serialNumbers.some((serial) => !serial)) return
+    if (new Set(serialKeys).size !== serialKeys.length) {
+      showError("Duplicate serial number found. Please enter unique serial numbers.")
+      return
+    }
+
+    const existingSerials = new Set()
+    assets.forEach((asset) => {
+      if (editingAssetId && asset.assetId === editingAssetId) return
+      ;(asset.serialNumbers ?? []).forEach((serial) => {
+        const serialKey = normalizeSerialKey(serial)
+        if (serialKey) existingSerials.add(serialKey)
+      })
+    })
+
+    const duplicateExistingSerial = enteredSerialNumbers.find((serial) => existingSerials.has(normalizeSerialKey(serial)))
+    if (duplicateExistingSerial) {
+      showError(`Serial number "${duplicateExistingSerial}" already exists.`)
+      return
+    }
 
     const now = new Date().toISOString()
 
-    // Edit mode: update single existing asset as before
     if (editingAssetId) {
       const { nextCounters } = generateAssetId({
         catalog,
@@ -603,26 +665,27 @@ function InventoryDashboard() {
         invoiceFileName: assetForm.invoiceFileName,
         invoiceFileType: assetForm.invoiceFileType,
         purchaseDate: assetForm.purchaseDate,
+        warrantyDate: assetForm.warrantyDate,
         orderDate: assetForm.orderDate,
         supplyDate: assetForm.supplyDate,
+        sourceINoteNo: assets.find((asset) => asset.assetId === editingAssetId)?.sourceINoteNo || "",
+        sourceINoteItemDescription: assets.find((asset) => asset.assetId === editingAssetId)?.sourceINoteItemDescription || "",
         createdAt: now,
         updatedAt: now,
       }
       setInventory((current) => ({
         ...current,
-        assets: (current.assets ?? []).map((asset) =>
-          asset.assetId === editingAssetId ? updatedAsset : asset,
-        ),
+        assets: (current.assets ?? []).map((asset) => asset.assetId === editingAssetId ? updatedAsset : asset),
         counters: nextCounters,
       }))
       setAssetModalOpen(false)
       setEditingAssetId(null)
+      setAssetPrefillSource(null)
       setAssetForm(emptyAssetForm(catalog))
       showSuccess("Asset updated successfully.")
       return
     }
 
-    // Add mode: keep serial-tracked items separate, otherwise store quantity in one record.
     const newAssets = []
     let runningCounters = { ...(inventory.counters ?? {}) }
 
@@ -635,7 +698,6 @@ function InventoryDashboard() {
         counters: runningCounters,
       })
       runningCounters = nextCounters
-
       newAssets.push({
         id: `asset-${assetId}`,
         assetId,
@@ -651,19 +713,18 @@ function InventoryDashboard() {
         invoiceFileName: assetForm.invoiceFileName,
         invoiceFileType: assetForm.invoiceFileType,
         purchaseDate: assetForm.purchaseDate,
+        warrantyDate: assetForm.warrantyDate,
         orderDate: assetForm.orderDate,
         supplyDate: assetForm.supplyDate,
+        sourceINoteNo: assetPrefillSource?.noteNo || "",
+        sourceINoteItemDescription: assetPrefillSource?.itemDescription || "",
         createdAt: now,
         updatedAt: now,
       })
     }
 
-    if (useSerialNumbers) {
-      for (let i = 0; i < quantity; i++) {
-        createAssetRecord(1, [serialNumbers[i]])
-      }
-    } else {
-      createAssetRecord(quantity, [])
+    for (let i = 0; i < quantity; i++) {
+      createAssetRecord(1, useSerialNumbers && serialNumbers[i] ? [serialNumbers[i]] : [])
     }
 
     setInventory((current) => ({
@@ -672,6 +733,7 @@ function InventoryDashboard() {
       counters: runningCounters,
     }))
     setAssetModalOpen(false)
+    setAssetPrefillSource(null)
     setAssetForm(emptyAssetForm(catalog))
     showSuccess(`${quantity} asset${quantity > 1 ? "s" : ""} added successfully.`)
   }
@@ -687,9 +749,7 @@ function InventoryDashboard() {
       createdAt: now,
       updatedAt: now,
     }
-
     if (!nextEmployee.code || !nextEmployee.name) return
-
     setInventory((current) => ({
       ...current,
       employees: editingEmployeeId
@@ -721,12 +781,10 @@ function InventoryDashboard() {
       createdAt: now,
       updatedAt: now,
     }
-
     if (!nextIssue.assetId || !nextIssue.employeeId || !nextIssue.employeeName || !nextIssue.location) {
       showSuccess("Please select both asset and employee before issuing.")
       return
     }
-
     setInventory((current) => ({
       ...current,
       issues: editingIssueId
@@ -750,6 +808,7 @@ function InventoryDashboard() {
       ...current,
       assets: (current.assets ?? []).filter((asset) => asset.assetId !== assetId),
     }))
+    showSuccess("Asset deleted successfully.")
   }
 
   function exportAssetsCsv() {
@@ -759,11 +818,21 @@ function InventoryDashboard() {
     showSuccess("CSV exported successfully.")
   }
 
+  function exportStocksCsv() {
+    const departmentAssets = stockAssets.filter((asset) => asset.type === activeStocksTab)
+    const csv = buildStocksCsv(departmentAssets, catalog)
+    const dateStamp = new Date().toISOString().slice(0, 10)
+    const fileName = `stocks_${String(activeStocksTab || "").toLowerCase()}_${dateStamp}.csv`
+    downloadTextFile(fileName, csv, "text/csv;charset=utf-8")
+    showSuccess(`${activeStocksTab} stocks CSV exported successfully.`)
+  }
+
   function removeEmployee(employeeId) {
     setInventory((current) => ({
       ...current,
       employees: (current.employees ?? []).filter((employee) => employee.id !== employeeId),
     }))
+    showSuccess("Employee deleted successfully.")
   }
 
   function returnIssue(issueId) {
@@ -810,61 +879,67 @@ function InventoryDashboard() {
 
   return (
     <div className="h-screen overflow-hidden bg-[#eef2f6] text-slate-900">
-      <div className="grid h-full lg:grid-cols-[280px_1fr]">
+      {/* Use flex so the sidebar remains visible when expanded. */}
+      <div className="flex h-full overflow-hidden">
         <Sidebar activeSection={activeSection} onSectionChange={setActiveSection} counts={counts} />
 
-        <main className="flex h-full flex-col overflow-hidden px-4 py-4 md:px-6 md:py-6">
+        <main className="flex h-full min-w-0 flex-1 flex-col overflow-hidden p-0">
           {toast ? (
-            <div className="fixed right-4 top-4 z-50 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-900 shadow-lg shadow-emerald-950/10">
+            <div
+              key={toast.id}
+              role="status"
+              aria-live="polite"
+              className={[
+                "fixed right-4 top-4 z-[100] rounded-2xl border px-4 py-3 text-sm font-medium shadow-lg",
+                toast.type === "error"
+                  ? "border-rose-200 bg-rose-50 text-rose-900 shadow-rose-950/10"
+                  : "border-emerald-200 bg-emerald-50 text-emerald-900 shadow-emerald-950/10",
+              ].join(" ")}
+            >
               {toast.message}
             </div>
           ) : null}
-          <div className="mx-auto flex h-full w-full max-w-7xl flex-col overflow-hidden">
-            {activeSection === "dashboard" ? (
-              <div className="flex-1 space-y-6 overflow-y-auto">
-                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-                  {stats.map((stat) => (
-                    <StatCard key={stat.label} {...stat} />
-                  ))}
-                </div>
-                <div className="relative min-h-[620px] overflow-hidden rounded-3xl border border-slate-200 bg-slate-950/5 shadow-sm md:min-h-[740px]">
-                  {/* <div className="absolute inset-0 bg-gradient-to-br from-slate-950/5 via-white/10 to-slate-950/10" /> */}
-                  <div className="absolute inset-0">
-                    <img
-                      src={campusImage}
-                      alt="RCB Campus"
-                      className="h-full w-full object-cover object-center"
-                    />
-                  </div>
-                  <div className="absolute inset-0 bg-gradient-to-r from-blue-950/50 via-blue-950/30 to-blue-950/5" />
-                  <div className="relative z-10 flex min-h-[620px] items-start px-6 pt-12 md:min-h-[740px] md:px-10 md:pt-16">
-                    <div className="max-w-2xl p-6 text-white md:p-8">
-                      <h2 className="text-3xl font-bold tracking-tight text-white md:text-5xl">
-                        Regional Centre for Biotechnology
-                      </h2>
-                      <p className="mt-4 max-w-xl text-base leading-7 text-white/90 md:text-lg">
-                        A centralized platform designed to efficiently manage organizational assets and resources across all departments.
-                      </p>
-                      <div className="mt-7 space-y-3">
-                        <div className="flex items-center gap-3 text-white">
-                          <CircleCheckBig className="size-5 flex-shrink-0 text-emerald-400" />
-                          <span className="text-base font-medium">Real-time Stock Monitoring</span>
-                        </div>
-                        <div className="flex items-center gap-3 text-white">
-                          <CircleCheckBig className="size-5 flex-shrink-0 text-emerald-400" />
-                          <span className="text-base font-medium">Category-wise Asset Tracking</span>
-                        </div>
-                        <div className="flex items-center gap-3 text-white">
-                          <CircleCheckBig className="size-5 flex-shrink-0 text-emerald-400" />
-                          <span className="text-base font-medium">Easy Data Access & Reports</span>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ) : null}
 
+          <div className="flex h-full w-full min-w-0 flex-col">
+           {activeSection === "dashboard" ? (
+  <div className="relative flex-1 min-w-0 rounded-3xl overflow-hidden">
+    <img
+      src={campusImage}
+      alt="RCB Campus"
+      className="absolute inset-0 h-full w-full object-cover object-center"
+    />
+    <div className="absolute inset-0 bg-gradient-to-b from-black/40 via-black/20 to-black/50" />
+    <div className="relative z-10 flex h-full flex-col justify-between p-6 md:p-10">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        {stats.map((stat) => (
+          <StatCard key={stat.label} {...stat} />
+        ))}
+      </div>
+      <div className="max-w-2xl">
+        <h2 className="text-3xl font-bold tracking-tight text-white md:text-5xl">
+          Regional Centre for Biotechnology
+        </h2>
+        <p className="mt-4 max-w-xl text-base leading-7 text-white/80 md:text-lg">
+          A centralized platform designed to efficiently manage organizational assets and resources across all departments.
+        </p>
+        <div className="mt-6 space-y-3">
+          <div className="flex items-center gap-3 text-white">
+            <CircleCheckBig className="size-5 flex-shrink-0 text-emerald-400" />
+            <span className="text-base font-medium">Real-time Stock Monitoring</span>
+          </div>
+          <div className="flex items-center gap-3 text-white">
+            <CircleCheckBig className="size-5 flex-shrink-0 text-emerald-400" />
+            <span className="text-base font-medium">Category-wise Asset Tracking</span>
+          </div>
+          <div className="flex items-center gap-3 text-white">
+            <CircleCheckBig className="size-5 flex-shrink-0 text-emerald-400" />
+            <span className="text-base font-medium">Easy Data Access & Reports</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+) : null}
             {activeSection === "assets" ? (
               <AssetsSection
                 catalog={catalog}
@@ -889,6 +964,7 @@ function InventoryDashboard() {
                 assetsWithAvailability={assetsWithAvailability}
                 activeStocksTab={activeStocksTab}
                 onActiveStocksTabChange={setActiveStocksTab}
+                onExportCsv={exportStocksCsv}
                 searchTerm={stocksSearchTerm}
                 onSearchTermChange={setStocksSearchTerm}
                 onViewInvoice={setInvoicePreview}
@@ -904,6 +980,10 @@ function InventoryDashboard() {
               />
             ) : null}
 
+            {activeSection === "i-note" ? (
+              <INoteSection notes={notes} assets={assets} onAddAssetFromINote={openAssetModalFromINote} />
+            ) : null}
+
             {activeSection === "issue-return" ? (
               <IssueReturnSection
                 issues={issues}
@@ -917,79 +997,44 @@ function InventoryDashboard() {
                 onReturnIssue={returnIssue}
               />
             ) : null}
-
-            {activeSection === "inote" ? (
-              <SectionShell
-                title="I-Note"
-                description="I-Note number, dates, invoice, order, indentor, and supplier details."
-                action={
-                  <ActionButton onClick={() => { setNoteForm(emptyNoteForm()); setNoteModalOpen(true) }}>
-                    <Plus className="size-4" />
-                    Generate I-Note
-                  </ActionButton>
-                }
-              >
-                <div className="overflow-hidden rounded-2xl border border-slate-200">
-                  <div className="max-h-96 overflow-y-auto">
-                    <table className="min-w-full divide-y divide-slate-200 text-left text-xs">
-                      <thead className="sticky top-0 z-10 bg-slate-50 text-slate-500">
-                        <tr>
-                          <th className="px-4 py-3 font-medium">S.No.</th>
-                          <th className="px-4 py-3 font-medium">i-Note No.</th>
-                          <th className="px-4 py-3 font-medium">i-Note Date</th>
-                          <th className="px-4 py-3 font-medium">Invoice No</th>
-                          <th className="px-4 py-3 font-medium">Order No</th>
-                          <th className="px-4 py-3 font-medium">Order Date</th>
-                          <th className="px-4 py-3 font-medium">Name of the Indentor</th>
-                          <th className="px-4 py-3 font-medium">Supplier Name</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100 bg-white">
-                        {notes.length ? (
-                          notes.map((note, index) => (
-                            <tr key={note.id} className="hover:bg-slate-50">
-                              <td className="px-4 py-3 font-semibold text-slate-900">{index + 1}</td>
-                              <td className="px-4 py-3 font-semibold text-slate-900">{note.noteId || `RCB/INOTE/${String(new Date().getFullYear()).slice(-2)}/${String(notes.length - index).padStart(3, '0')}`}</td>
-                              <td className="px-4 py-3 text-slate-700">{formatDate(note.inoteDate)}</td>
-                              <td className="px-4 py-3 text-slate-700">{note.invoiceNo || "â€”"}</td>
-                              <td className="px-4 py-3 text-slate-700">{note.orderNo || "â€”"}</td>
-                              <td className="px-4 py-3 text-slate-700">{formatDate(note.orderDate)}</td>
-                              <td className="px-4 py-3 text-slate-700">{note.indentorName || "â€”"}</td>
-                              <td className="px-4 py-3 text-slate-700">{note.supplierName || "â€”"}</td>
-                            </tr>
-                          ))
-                        ) : (
-                          <tr>
-                            <td colSpan={8} className="px-4 py-8 text-center text-sm text-slate-500">
-                              No I-Notes created yet.
-                            </td>
-                          </tr>
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              </SectionShell>
-            ) : null}
           </div>
         </main>
       </div>
 
+      {/* Asset Modal */}
       <Modal
         open={assetModalOpen}
-        onClose={() => {
-          setAssetModalOpen(false)
-          setEditingAssetId(null)
-        }}
+        onClose={() => { setAssetModalOpen(false); setEditingAssetId(null); setAssetPrefillSource(null) }}
         title={editingAssetId ? "Edit Asset" : "Add Asset"}
         description="Create or update an asset with quantity, serial numbers, and invoice details."
       >
         <form className="space-y-5" onSubmit={submitAssetForm}>
+          {assetPrefillSource ? (
+            <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
+              <div className="font-semibold">Linked from I-Note {assetPrefillSource.noteNo || "-"}</div>
+              <div className="mt-1 text-xs leading-5 text-emerald-800">
+                Accepted quantity {assetPrefillSource.quantity}. {assetPrefillSource.itemDescription || "Item description not available."}
+              </div>
+              {assetPrefillSource.orderNo ? (
+                <div className="mt-1 text-xs text-emerald-700">Order: {assetPrefillSource.orderNo}</div>
+              ) : null}
+              {assetPrefillSource.invoiceNo ? (
+                <div className="mt-1 text-xs text-emerald-700">Invoice: {assetPrefillSource.invoiceNo}</div>
+              ) : null}
+              {assetPrefillSource.orderDate || assetPrefillSource.supplyDate ? (
+                <div className="mt-1 text-xs text-emerald-700">
+                  {assetPrefillSource.orderDate ? `Order date: ${assetPrefillSource.orderDate}` : ""}
+                  {assetPrefillSource.orderDate && assetPrefillSource.supplyDate ? " | " : ""}
+                  {assetPrefillSource.supplyDate ? `Delivery date: ${assetPrefillSource.supplyDate}` : ""}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
           <div className="grid gap-4 md:grid-cols-2">
             <div className="grid gap-2">
               <div className="flex items-center justify-between gap-3">
                 <span className="text-sm font-medium text-slate-700">Type</span>
-                <button type="button" className="text-xs font-medium text-lime-600 hover:text-lime-900" onClick={() => openCatalogModal("type")}>
+                <button type="button" className="text-xs font-medium text-green-600 hover:text-green-900" onClick={() => openCatalogModal("type")}>
                   + Add
                 </button>
               </div>
@@ -999,9 +1044,7 @@ function InventoryDashboard() {
                 className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none"
               >
                 {getTypeOptions(catalog).map((type) => (
-                  <option key={type.value} value={type.value}>
-                    {type.label}
-                  </option>
+                  <option key={type.value} value={type.value}>{type.label}</option>
                 ))}
               </select>
             </div>
@@ -1019,9 +1062,7 @@ function InventoryDashboard() {
                 className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none"
               >
                 {getCategoriesForType(catalog, assetForm.type).map((category) => (
-                  <option key={category.label} value={category.label}>
-                    {category.label}
-                  </option>
+                  <option key={category.label} value={category.label}>{category.label}</option>
                 ))}
               </select>
             </div>
@@ -1043,9 +1084,7 @@ function InventoryDashboard() {
                   <option value={assetForm.subCategory}>{assetForm.subCategory}</option>
                 )}
                 {assetSubCategoryOptions.map((subCategory) => (
-                  <option key={subCategory.label} value={subCategory.label}>
-                    {subCategory.label}
-                  </option>
+                  <option key={subCategory.label} value={subCategory.label}>{subCategory.label}</option>
                 ))}
               </select>
             </div>
@@ -1111,7 +1150,7 @@ function InventoryDashboard() {
               <span className="text-sm font-medium text-slate-700">Date of Warranty</span>
               <input
                 type="date"
-                value={assetForm.warrantyDate}
+                value={assetForm.warrantyDate || ""}
                 onChange={(event) => setAssetForm((current) => ({ ...current, warrantyDate: event.target.value }))}
                 className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none"
               />
@@ -1142,7 +1181,7 @@ function InventoryDashboard() {
             <div className="mb-4 flex items-start justify-between gap-4">
               <div>
                 <h3 className="text-sm font-semibold text-slate-900">Serial Numbers</h3>
-                <p className="text-xs text-slate-500">Enter one serial number for each quantity item.</p>
+                <p className="text-xs text-slate-500">Tick to add serial numbers. Entered serial numbers cannot match another asset.</p>
               </div>
               <label className="flex items-start gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
                 <input
@@ -1169,13 +1208,17 @@ function InventoryDashboard() {
               </div>
             ) : (
               <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-4 text-sm text-slate-500">
-              Serial numbers are disabled for this asset. It will save with quantity only.
+                Serial numbers are disabled for this asset. It will save without serial numbers.
               </div>
             )}
           </div>
 
           <div className="flex justify-end gap-3">
-            <ActionButton type="button" className="bg-slate-200 text-blue-900 hover:bg-slate-300" onClick={() => setAssetModalOpen(false)}>
+            <ActionButton
+              type="button"
+              className="bg-slate-200 text-blue-900 hover:bg-slate-300"
+              onClick={() => { setAssetModalOpen(false); setAssetPrefillSource(null) }}
+            >
               Cancel
             </ActionButton>
             <ActionButton type="submit">{editingAssetId ? "Update Asset" : "Save Asset"}</ActionButton>
@@ -1183,12 +1226,10 @@ function InventoryDashboard() {
         </form>
       </Modal>
 
+      {/* Employee Modal */}
       <Modal
         open={employeeModalOpen}
-        onClose={() => {
-          setEmployeeModalOpen(false)
-          setEditingEmployeeId(null)
-        }}
+        onClose={() => { setEmployeeModalOpen(false); setEditingEmployeeId(null) }}
         title={editingEmployeeId ? "Edit Employee" : "Add Employee"}
         description="Create a new employee record."
         widthClass="max-w-2xl"
@@ -1221,7 +1262,6 @@ function InventoryDashboard() {
               />
             </label>
           </div>
-
           <div className="flex justify-end gap-3">
             <ActionButton type="button" className="bg-slate-200 text-slate-900 hover:bg-slate-300" onClick={() => setEmployeeModalOpen(false)}>
               Cancel
@@ -1231,6 +1271,7 @@ function InventoryDashboard() {
         </form>
       </Modal>
 
+      {/* Issue Modal */}
       <Modal
         open={issueModalOpen}
         onClose={() => {
@@ -1246,19 +1287,15 @@ function InventoryDashboard() {
       >
         <form className="space-y-5" onSubmit={submitIssueForm}>
           <div className="space-y-4">
-            {/* Searchable Asset Dropdown - Combined with all details */}
             <div className="relative grid gap-2">
               <span className="text-sm font-medium text-slate-700">Select Asset</span>
               <div className="text-xs text-slate-500 mb-1">ID | Sub Category | Make/Model | Serial</div>
               <div className="relative">
                 <input
                   type="text"
-                  placeholder="Start typing Asset ID, Sub Category, Make, or Model... (e.g., RCB or Laptop)"
+                  placeholder="Start typing Asset ID, Sub Category, Make, or Model..."
                   value={showAssetDropdown ? assetSearchTerm : (issueForm.assetId ? `${issueForm.assetId}` : "")}
-                  onChange={(e) => {
-                    setAssetSearchTerm(e.target.value)
-                    setShowAssetDropdown(true)
-                  }}
+                  onChange={(e) => { setAssetSearchTerm(e.target.value); setShowAssetDropdown(true) }}
                   onFocus={() => setShowAssetDropdown(true)}
                   onBlur={() => setTimeout(() => setShowAssetDropdown(false), 200)}
                   className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
@@ -1306,23 +1343,19 @@ function InventoryDashboard() {
               )}
             </div>
 
-            {/* Searchable Employee Dropdown - Combined with all details */}
             <div className="relative grid gap-2">
               <span className="text-sm font-medium text-slate-700">Select Employee</span>
               <div className="text-xs text-slate-500 mb-1">Code | Name | Email</div>
               <div className="relative">
                 <input
                   type="text"
-                  placeholder="Start typing Employee Code or Name... (e.g., EMP or John)"
+                  placeholder="Start typing Employee Code or Name..."
                   value={showEmployeeDropdown
                     ? employeeSearchTerm
                     : (issueForm.employeeCode
                       ? `${issueForm.employeeCode}${issueForm.employeeName ? ` - ${issueForm.employeeName}` : ""}`
                       : "")}
-                  onChange={(e) => {
-                    setEmployeeSearchTerm(e.target.value)
-                    setShowEmployeeDropdown(true)
-                  }}
+                  onChange={(e) => { setEmployeeSearchTerm(e.target.value); setShowEmployeeDropdown(true) }}
                   onFocus={() => setShowEmployeeDropdown(true)}
                   onBlur={() => setTimeout(() => setShowEmployeeDropdown(false), 200)}
                   className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
@@ -1367,7 +1400,6 @@ function InventoryDashboard() {
               )}
             </div>
 
-            {/* Location & Issue Date */}
             <div className="grid gap-4 md:grid-cols-2 pt-2">
               <label className="grid gap-2">
                 <span className="text-sm font-medium text-slate-700">Location</span>
@@ -1378,7 +1410,6 @@ function InventoryDashboard() {
                   placeholder="e.g., Office, Lab, Warehouse"
                 />
               </label>
-
               <label className="grid gap-2">
                 <span className="text-sm font-medium text-slate-700">Issue Date</span>
                 <input
@@ -1400,32 +1431,23 @@ function InventoryDashboard() {
         </form>
       </Modal>
 
+      {/* Catalog Modal */}
       <Modal
         open={!!catalogModal}
         onClose={() => setCatalogModal(null)}
         title={
-          catalogModal?.target === "type"
-            ? "Add Type"
-            : catalogModal?.target === "category"
-              ? "Add Category"
-              : "Add Sub Category"
+          catalogModal?.target === "type" ? "Add Type"
+            : catalogModal?.target === "category" ? "Add Category"
+            : "Add Sub Category"
         }
         description={
-          catalogModal?.target === "type"
-            ? "Add a new asset type option."
-            : catalogModal?.target === "category"
-              ? `Add a new category under ${assetForm.type}.`
-              : `Add a new sub category under ${assetForm.type} / ${assetForm.category}.`
+          catalogModal?.target === "type" ? "Add a new asset type option."
+            : catalogModal?.target === "category" ? `Add a new category under ${assetForm.type}.`
+            : `Add a new sub category under ${assetForm.type} / ${assetForm.category}.`
         }
         widthClass="max-w-xl"
       >
-        <form
-          className="space-y-5"
-          onSubmit={(event) => {
-            event.preventDefault()
-            addCatalogOption()
-          }}
-        >
+        <form className="space-y-5" onSubmit={(event) => { event.preventDefault(); addCatalogOption() }}>
           <label className="grid gap-2">
             <span className="text-sm font-medium text-slate-700">Name</span>
             <input
@@ -1433,29 +1455,21 @@ function InventoryDashboard() {
               onChange={(event) => setCatalogModal((current) => ({ ...(current ?? { target: "type", value: "" }), value: event.target.value }))}
               className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none"
               placeholder={
-                catalogModal?.target === "type"
-                  ? "Example: Location"
-                  : catalogModal?.target === "category"
-                    ? "Example: Network Equipment"
-                    : "Example: Laptops"
+                catalogModal?.target === "type" ? "Example: Location"
+                  : catalogModal?.target === "category" ? "Example: Network Equipment"
+                  : "Example: Laptops"
               }
             />
           </label>
-
           {catalogModal?.target !== "type" ? (
             <p className="text-xs text-slate-500">
               {catalogModal?.target === "category" ? (
-                <>
-                  This category will be attached to <span className="font-medium text-slate-700">{assetForm.type}</span>.
-                </>
+                <>This category will be attached to <span className="font-medium text-slate-700">{assetForm.type}</span>.</>
               ) : (
-                <>
-                  This sub category will be attached to <span className="font-medium text-slate-700">{assetForm.type} / {assetForm.category}</span>.
-                </>
+                <>This sub category will be attached to <span className="font-medium text-slate-700">{assetForm.type} / {assetForm.category}</span>.</>
               )}
             </p>
           ) : null}
-
           <div className="flex justify-end gap-3">
             <ActionButton type="button" className="bg-slate-200 text-slate-900 hover:bg-slate-300" onClick={() => setCatalogModal(null)}>
               Cancel
@@ -1465,125 +1479,7 @@ function InventoryDashboard() {
         </form>
       </Modal>
 
-      <Modal
-        open={noteModalOpen}
-        onClose={() => setNoteModalOpen(false)}
-        title="Generate I-Note"
-        description="Add the I-Note number, dates, invoice, order, indentor, and supplier details."
-        widthClass="max-w-2xl"
-      >
-        <form
-          className="space-y-5"
-          onSubmit={(event) => {
-            event.preventDefault()
-            const now = new Date().toISOString()
-            const { noteId, nextCounter } = generateNoteId(inventory)
-
-            const nextNote = {
-              id: `note-${now}`,
-              noteId,
-              inoteDate: noteForm.inoteDate,
-              invoiceNo: noteForm.invoiceNo.trim(),
-              orderNo: noteForm.orderNo.trim(),
-              orderDate: noteForm.orderDate,
-              indentorName: noteForm.indentorName.trim(),
-              supplierName: noteForm.supplierName.trim(),
-              createdAt: now,
-              updatedAt: now,
-            }
-
-            if (!nextNote.invoiceNo || !nextNote.indentorName || !nextNote.supplierName) return
-
-            setInventory((current) => ({
-              ...current,
-              notes: [nextNote, ...(current.notes ?? [])],
-              counters: { ...(current.counters ?? {}), noteCounter: nextCounter },
-            }))
-            setNoteModalOpen(false)
-            setNoteForm(emptyNoteForm())
-            showSuccess("I-Note created successfully.")
-          }}
-        >
-          <div className="grid gap-4 md:grid-cols-2">
-            <label className="grid gap-2 md:col-span-2">
-              <span className="text-sm font-medium text-slate-700">I-Note No.</span>
-              <input
-                value={`RCB/INOTE/${String(new Date().getFullYear()).slice(-2)}/${String((inventory.counters?.noteCounter ?? 0) + 1).padStart(3, "0")}`}
-                readOnly
-                className="h-11 rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm outline-none"
-              />
-            </label>
-
-            <label className="grid gap-2">
-              <span className="text-sm font-medium text-slate-700">I-Note Date</span>
-              <input
-                type="date"
-                value={noteForm.inoteDate}
-                onChange={(e) => setNoteForm((c) => ({ ...c, inoteDate: e.target.value }))}
-                className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none"
-              />
-            </label>
-
-            <label className="grid gap-2">
-              <span className="text-sm font-medium text-slate-700">Invoice No.</span>
-              <input
-                value={noteForm.invoiceNo}
-                onChange={(e) => setNoteForm((c) => ({ ...c, invoiceNo: e.target.value }))}
-                className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none"
-                placeholder="Invoice number"
-              />
-            </label>
-
-            <label className="grid gap-2">
-              <span className="text-sm font-medium text-slate-700">Order No</span>
-              <input
-                value={noteForm.orderNo}
-                onChange={(e) => setNoteForm((c) => ({ ...c, orderNo: e.target.value }))}
-                className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none"
-                placeholder="Order number"
-              />
-            </label>
-
-            <label className="grid gap-2">
-              <span className="text-sm font-medium text-slate-700">Order Date</span>
-              <input
-                type="date"
-                value={noteForm.orderDate}
-                onChange={(e) => setNoteForm((c) => ({ ...c, orderDate: e.target.value }))}
-                className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none"
-              />
-            </label>
-
-            <label className="grid gap-2">
-              <span className="text-sm font-medium text-slate-700">Name of the Indentor</span>
-              <input
-                value={noteForm.indentorName}
-                onChange={(e) => setNoteForm((c) => ({ ...c, indentorName: e.target.value }))}
-                className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none"
-                placeholder="Indentor name"
-              />
-            </label>
-
-            <label className="grid gap-2 md:col-span-2">
-              <span className="text-sm font-medium text-slate-700">Supplier Name</span>
-              <input
-                value={noteForm.supplierName}
-                onChange={(e) => setNoteForm((c) => ({ ...c, supplierName: e.target.value }))}
-                className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none"
-                placeholder="Supplier name"
-              />
-            </label>
-          </div>
-
-          <div className="flex justify-end gap-3">
-            <ActionButton type="button" className="bg-slate-200 text-slate-900 hover:bg-slate-300" onClick={() => setNoteModalOpen(false)}>
-              Cancel
-            </ActionButton>
-            <ActionButton type="submit">Save I-Note</ActionButton>
-          </div>
-        </form>
-      </Modal>
-
+      {/* Invoice Preview Modal */}
       <Modal
         open={!!invoicePreview}
         onClose={() => setInvoicePreview(null)}

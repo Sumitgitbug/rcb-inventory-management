@@ -1,8 +1,22 @@
-function ActionButton({ children, className = "", ...props }) {
+function ActionButton({ children, style, ...props }) {
   return (
     <button
       type="button"
-      className={`inline-flex items-center gap-2 rounded-full bg-slate-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-800 ${className}`}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: "8px",
+        backgroundColor: "#f04405",
+        color: "#ffffff",
+        border: "none",
+        borderRadius: "999px",
+        padding: "8px 16px",
+        fontSize: "14px",
+        fontWeight: 500,
+        cursor: "pointer",
+        transition: "opacity 0.15s",
+        ...style,
+      }}
       {...props}
     >
       {children}
@@ -13,21 +27,31 @@ function ActionButton({ children, className = "", ...props }) {
 function StatCard({ label, value, icon }) {
   const Icon = icon
   return (
-    <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="flex items-center justify-between gap-4">
-        <div>
-          <p className="text-sm text-slate-500">{label}</p>
-          <p className="mt-2 text-3xl font-semibold tracking-tight text-slate-900">{value}</p>
-        </div>
-        <div className="flex size-12 items-center justify-center rounded-2xl bg-slate-100 text-slate-900">
-          <Icon className="size-5" />
-        </div>
+    <div style={{
+      background: "rgba(15, 42, 34, 0.47)",
+      border: "1px solid rgba(255, 255, 255, 0.79)",
+      borderRadius: "20px",
+      padding: "20px 24px",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "space-between",
+    }}>
+      <div>
+        <p style={{ color: "rgba(255, 255, 255, 0.79)", fontSize: "13px", marginBottom: "6px" }}>{label}</p>
+        <p style={{ color: "#ffffff", fontSize: "32px", fontWeight: 700, lineHeight: 1 }}>{value}</p>
+      </div>
+      <div style={{
+        width: "52px", height: "52px", borderRadius: "14px",
+        background: "rgba(255, 255, 255, 0.66)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+      }}>
+        <Icon style={{ width: "22px", height: "22px", color: "rgba(158, 50, 20, 0.92)" }} />
       </div>
     </div>
   )
 }
 
-function SectionShell({ title, description, action, children }) {
+function SectionShell({ title, description, action, children, contentClassName = "" }) {
   return (
     <div className="flex h-full flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
       <div className="flex-none border-b border-slate-200 px-6 py-5">
@@ -39,7 +63,7 @@ function SectionShell({ title, description, action, children }) {
           {action ? <div className="flex shrink-0">{action}</div> : null}
         </div>
       </div>
-      <div className="flex-1 overflow-y-auto px-6 py-6">{children}</div>
+      <div className={["flex min-h-0 flex-1 flex-col px-6 py-6", contentClassName].filter(Boolean).join(" ")}>{children}</div>
     </div>
   )
 }

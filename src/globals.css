@@ -2,8 +2,6 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 
-@custom-variant dark (&:is(.dark *));
-
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -122,4 +120,39 @@
   body {
     @apply bg-background text-foreground;
   }
+
+  button:not(:disabled) {
+    @apply transition duration-150 ease-out;
+  }
+
+  button:not(:disabled):hover {
+    transform: translateY(-1px);
+    filter: brightness(0.97);
+    box-shadow: 0 8px 18px rgb(15 23 42 / 0.12);
+  }
+
+  button:not(:disabled):active {
+    transform: translateY(0) scale(0.99);
+    box-shadow: none;
+  }
+}
+
+body.modal-open .dashboard-scroll-area {
+  overflow: hidden !important;
+}
+
+html,
+body,
+#root {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+html::-webkit-scrollbar,
+body::-webkit-scrollbar,
+#root::-webkit-scrollbar,
+*::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
 }

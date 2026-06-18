@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import json
 import os
+from urllib import error as urlerror
+from urllib import parse as urlparse
+from urllib import request as urlrequest
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -14,8 +17,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Keep backend fallback state outside the Vite project root so file writes
-# do not trigger hot-reload loops in the frontend dev server.
 STATE_FILE = Path.home() / ".inventory_management" / "inventory_state.json"
 
 
@@ -34,6 +35,10 @@ MYSQL_CONFIG = {
     "database": os.getenv("MYSQL_DATABASE", "inventory_management"),
     "autocommit": False,
 }
+
+I_NOTE_API_BASE_URL = "https://ercb.rcb.ac.in/new/api/i-note-records.php"
+I_NOTE_DETAIL_API_URL = "https://ercb.rcb.ac.in/new/api/i-note.php"
+I_NOTE_API_KEY = os.getenv("INOTE_API_KEY", "").strip()
 
 
 def create_app() -> Flask:
@@ -105,7 +110,6 @@ def _load_file_state() -> dict:
             data = json.load(handle)
             if isinstance(data, dict):
                 state = {**_default_state(), **data}
-                # Calculate availableQuantity from issues for file fallback too
                 issued_counts: dict[str, int] = {}
                 for issue in state.get("issues", []):
                     if _normalize_status(issue.get("status")) != "returned":
@@ -197,11 +201,22 @@ def _ensure_schema() -> None:
                 purchase_date DATE NULL,
                 order_date DATE NULL,
                 supply_date DATE NULL,
+                source_i_note_no VARCHAR(120) DEFAULT '',
+                source_i_note_item_desc VARCHAR(255) DEFAULT '',
                 created_at DATETIME NOT NULL,
                 updated_at DATETIME NOT NULL
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """
         )
+        for statement in (
+            "ALTER TABLE assets ADD COLUMN source_i_note_no VARCHAR(120) DEFAULT ''",
+            "ALTER TABLE assets ADD COLUMN source_i_note_item_desc VARCHAR(255) DEFAULT ''",
+        ):
+            try:
+                cursor.execute(statement)
+            except mysql.connector.Error as exc:
+                if exc.errno != 1060:
+                    raise
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS employees (
@@ -297,7 +312,6 @@ def _load_state():
         return _load_file_state()
     try:
         cursor = connection.cursor(dictionary=True)
-        # First load all active issues so we can calculate availableQuantity per asset
         cursor.execute(
             """
             SELECT asset_id, COUNT(*) as issued_count
@@ -313,7 +327,7 @@ def _load_state():
             SELECT asset_id, type_name, category_name, sub_category, make_name, model_name,
                    quantity, serial_numbers, invoice_no, invoice_file, invoice_file_name,
                    invoice_file_type, purchase_date, order_date, supply_date,
-                   created_at, updated_at
+                   source_i_note_no, source_i_note_item_desc, created_at, updated_at
             FROM assets
             ORDER BY created_at DESC
             """
@@ -324,8 +338,6 @@ def _load_state():
             if isinstance(serial_numbers, str):
                 serial_numbers = json.loads(serial_numbers)
             qty = int(row["quantity"] or 1)
-            # Each asset now has quantity=1 (one per serial number)
-            # availableQuantity = quantity minus currently issued (not returned) issues
             issued = issued_counts.get(row["asset_id"], 0)
             available_qty = max(0, qty - issued)
             state["assets"].append(
@@ -347,6 +359,8 @@ def _load_state():
                     "purchaseDate": _serialize_date(row["purchase_date"]),
                     "orderDate": _serialize_date(row["order_date"]),
                     "supplyDate": _serialize_date(row["supply_date"]),
+                    "sourceINoteNo": row["source_i_note_no"] or "",
+                    "sourceINoteItemDescription": row["source_i_note_item_desc"] or "",
                     "createdAt": _serialize_datetime(row["created_at"]),
                     "updatedAt": _serialize_datetime(row["updated_at"]),
                 }
@@ -464,8 +478,9 @@ def _save_state(state):
                 INSERT INTO assets (
                     asset_id, type_name, category_name, sub_category, make_name, model_name,
                     quantity, serial_numbers, invoice_no, invoice_file, invoice_file_name,
-                    invoice_file_type, purchase_date, order_date, supply_date, created_at, updated_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    invoice_file_type, purchase_date, order_date, supply_date,
+                    source_i_note_no, source_i_note_item_desc, created_at, updated_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     asset["assetId"],
@@ -483,6 +498,8 @@ def _save_state(state):
                     _parse_date(asset.get("purchaseDate")),
                     _parse_date(asset.get("orderDate")),
                     _parse_date(asset.get("supplyDate")),
+                    asset.get("sourceINoteNo", ""),
+                    asset.get("sourceINoteItemDescription", ""),
                     _parse_datetime(asset.get("createdAt")),
                     _parse_datetime(asset.get("updatedAt")),
                 ),
@@ -619,6 +636,182 @@ def put_inventory():
         return jsonify({"status": "saved"})
     except mysql.connector.Error as exc:
         return jsonify({"error": str(exc)}), 500
+
+
+def _fetch_all_inote_records() -> list:
+    """Fetch all pages and return a single list."""
+    all_records = []
+    page = 1
+    batch = 100
+
+    while True:
+        query = urlparse.urlencode({"page": page, "limit": batch})
+        url = f"{I_NOTE_API_BASE_URL}?{query}"
+        req = urlrequest.Request(
+            url,
+            headers={"Accept": "application/json", "Api-Key": I_NOTE_API_KEY},
+            method="GET",
+        )
+        with urlrequest.urlopen(req, timeout=30) as resp:
+            body = resp.read()
+            payload = json.loads(body.decode("utf-8"))
+
+        records = []
+        if isinstance(payload, list):
+            records = payload
+        elif isinstance(payload, dict):
+            for key in ("data", "records", "items", "result"):
+                if isinstance(payload.get(key), list):
+                    records = payload[key]
+                    break
+
+        if not records:
+            break
+
+        all_records.extend(records)
+
+        total_pages = int(payload.get("total_pages") or payload.get("totalPages") or 1) if isinstance(payload, dict) else 1
+        if page >= total_pages:
+            break
+        page += 1
+
+    return all_records
+
+
+def _positive_query_int(name: str, default: int) -> int:
+    try:
+        return max(1, int(request.args.get(name, str(default))))
+    except (TypeError, ValueError):
+        return default
+
+
+def _inote_group(note: dict) -> str:
+    fields = [
+        str(note.get("order_no") or ""),
+        str(note.get("purchaseDemandNo") or ""),
+        str(note.get("purchase_demand_no") or ""),
+        str(note.get("inote_no") or ""),
+        str(note.get("note_uid") or ""),
+    ]
+    text = " ".join(fields).upper()
+    if "/EQ/" in text:
+        return "equipment"
+    if "/CONS/" in text:
+        return "consumables"
+    return "other"
+
+
+@app.get("/api/i-note-records")
+def proxy_i_note_records():
+    if not I_NOTE_API_KEY:
+        return jsonify({"error": "missing i-note api key"}), 500
+
+    page_int = _positive_query_int("page", 1)
+    limit_int = _positive_query_int("limit", 10)
+    q = request.args.get("q", "").strip().lower()
+    group = request.args.get("group", "").strip().lower()
+
+    # No search/group filter: forward the request directly to the upstream API.
+    if not q and group not in {"equipment", "consumables"}:
+        query = urlparse.urlencode({"page": page_int, "limit": limit_int})
+        url = f"{I_NOTE_API_BASE_URL}?{query}"
+        req = urlrequest.Request(
+            url,
+            headers={"Accept": "application/json", "Api-Key": I_NOTE_API_KEY},
+            method="GET",
+        )
+        try:
+            with urlrequest.urlopen(req, timeout=30) as resp:
+                body = resp.read()
+                content_type = resp.headers.get_content_type()
+                status = resp.status
+                if content_type == "application/json":
+                    return jsonify(json.loads(body.decode("utf-8"))), status
+                return body, status, {"Content-Type": content_type}
+        except urlerror.HTTPError as exc:
+            body = exc.read()
+            return body, exc.code, {"Content-Type": exc.headers.get_content_type() if exc.headers else "text/plain"}
+        except urlerror.URLError as exc:
+            return jsonify({"error": f"upstream fetch failed: {exc.reason}"}), 502
+
+    # Search/group filter is active: fetch all records and filter locally.
+    try:
+        all_records = _fetch_all_inote_records()
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 502
+
+    def matches(note):
+        fields = [
+            str(note.get("inote_no") or ""),
+            str(note.get("indent_no") or ""),
+            str(note.get("order_no") or ""),
+            str(note.get("invoice_no") or ""),
+            str(note.get("agency") or ""),
+            str(note.get("inote_dt") or ""),
+            str(note.get("order_dt") or ""),
+        ]
+        return any(q in f.lower() for f in fields)
+
+    filtered = [
+        record for record in all_records
+        if (not q or matches(record)) and (group not in {"equipment", "consumables"} or _inote_group(record) == group)
+    ]
+    total = len(filtered)
+    total_pages = max(1, (total + limit_int - 1) // limit_int)
+    start = (page_int - 1) * limit_int
+    paginated = filtered[start: start + limit_int]
+
+    return jsonify({
+        "data": paginated,
+        "page": page_int,
+        "limit": limit_int,
+        "total_records": total,
+        "total_pages": total_pages,
+        "status": True,
+    }), 200
+
+
+@app.get("/api/get-i-note")
+def proxy_get_i_note():
+    if not I_NOTE_API_KEY:
+        return jsonify({"error": "missing i-note api key"}), 500
+
+    i_note = request.args.get("i_note", "").strip()
+    if not i_note:
+        return jsonify({"error": "i_note parameter required"}), 400
+
+    query = urlparse.urlencode({"i_note": i_note})
+    url = f"{I_NOTE_DETAIL_API_URL}?{query}"
+
+    req = urlrequest.Request(
+        url,
+        headers={
+            "Accept": "application/json",
+            "Api-Key": I_NOTE_API_KEY,
+        },
+        method="GET",
+    )
+
+    try:
+        with urlrequest.urlopen(req, timeout=30) as resp:
+            body = resp.read()
+            content_type = resp.headers.get_content_type()
+            if content_type == "application/json":
+                return jsonify(json.loads(body.decode("utf-8"))), resp.status
+            return body, resp.status, {"Content-Type": content_type}
+
+    except urlerror.HTTPError as exc:
+        body = exc.read()
+        content_type = exc.headers.get_content_type() if exc.headers else "text/plain"
+        if content_type == "application/json":
+            try:
+                return jsonify(json.loads(body.decode("utf-8"))), exc.code
+            except json.JSONDecodeError:
+                pass
+        return body, exc.code, {"Content-Type": content_type}
+
+    except urlerror.URLError as exc:
+        return jsonify({"error": f"upstream fetch failed: {exc.reason}"}), 502
 
 
 @app.errorhandler(404)

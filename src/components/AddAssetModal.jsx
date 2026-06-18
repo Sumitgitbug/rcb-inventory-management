@@ -1,7 +1,30 @@
 import { Upload } from "lucide-react"
 import Modal from "@/components/Modal"
-import { ActionButton } from "@/components/dashboard-ui"
 import { getCategoriesForType, getTypeOptions } from "@/data/inventoryCatalog"
+
+function ActionButton({ children, style = {}, ...props }) {
+  return (
+    <button
+      type="button"
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: "8px",
+        border: "none",
+        borderRadius: "999px",
+        padding: "8px 16px",
+        fontSize: "14px",
+        fontWeight: 500,
+        cursor: "pointer",
+        transition: "opacity 0.15s",
+        ...style,
+      }}
+      {...props}
+    >
+      {children}
+    </button>
+  )
+}
 
 function AddAssetModal({
   open,
@@ -33,7 +56,7 @@ function AddAssetModal({
           <div className="grid gap-2">
             <div className="flex items-center justify-between gap-3">
               <span className="text-sm font-medium text-slate-700">Type</span>
-              <button type="button" className="text-xs font-medium text-lime-600 hover:text-lime-900" onClick={() => onOpenCatalogModal("type")}>
+              <button type="button" className="text-xs font-medium text-orange-600 hover:text-orange-900" onClick={() => onOpenCatalogModal("type")}>
                 + Add
               </button>
             </div>
@@ -53,12 +76,13 @@ function AddAssetModal({
           <div className="grid gap-2">
             <div className="flex items-center justify-between gap-3">
               <span className="text-sm font-medium text-slate-700">Category</span>
-              <button type="button" className="text-xs font-medium text-lime-600 hover:text-lime-900" onClick={() => onOpenCatalogModal("category")}>
+              <button type="button" className="text-xs font-medium text-cyan-600 hover:text-cyan-900" onClick={() => onOpenCatalogModal("category")}>
                 + Add
               </button>
             </div>
             <select
               value={assetForm.category}
+
               onChange={(event) => onCategoryChange(event.target.value)}
               className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none"
             >
@@ -75,6 +99,7 @@ function AddAssetModal({
               <span className="text-sm font-medium text-slate-700">Sub Category</span>
               <button type="button" className="text-xs font-medium text-lime-600 hover:text-lime-900" onClick={() => onOpenCatalogModal("subcategory")}>
                 + Add
+                
               </button>
             </div>
             <select
@@ -186,7 +211,7 @@ function AddAssetModal({
           <div className="mb-4 flex items-start justify-between gap-4">
             <div>
               <h3 className="text-sm font-semibold text-slate-900">Serial Numbers</h3>
-              <p className="text-xs text-slate-500">Enter one serial number for each quantity item.</p>
+              <p className="text-xs text-slate-500">Tick to add serial numbers. Entered serial numbers cannot match another asset.</p>
             </div>
             <label className="inline-flex w-fit max-w-full items-start gap-2 rounded-xl border border-slate-200 bg-lime-50/50 px-3 py-2 text-xs text-slate-600">
               <input
@@ -213,7 +238,7 @@ function AddAssetModal({
             </div>
           ) : (
             <div className="rounded-2xl border border-dashed border-lime-200 bg-lime-50/50 p-4 text-sm text-slate-500">
-              Serial numbers are disabled for this asset. It will save with quantity only.
+              Serial numbers are disabled for this asset. It will save without serial numbers.
             </div>
           )}
 
@@ -230,7 +255,7 @@ function AddAssetModal({
               </label>
             </div>
           ) : null}
-          {Boolean(assetForm.generateINote) ? (
+          {assetForm.generateINote ? (
             <div className="grid gap-4 rounded-2xl border border-dashed border-lime-300 bg-lime-50/50 p-4 md:grid-cols-2">
               <label className="grid gap-2">
                 <span className="text-sm font-medium text-slate-700">Supplier Name</span>
@@ -256,10 +281,26 @@ function AddAssetModal({
         </div>
 
         <div className="flex justify-end gap-3">
-          <ActionButton type="button" className="bg-slate-200 text-blue-900 hover:bg-slate-300" onClick={onClose}>
-            Cancel
-          </ActionButton>
-          <ActionButton type="submit">{editingAssetId ? "Update Asset" : "Save Asset"}</ActionButton>
+          <ActionButton
+  type="button"
+  onClick={onClose}
+  style={{
+    backgroundColor: "#94b8aad6",
+    color: "#fff",
+  }}
+>
+  Cancel
+</ActionButton>
+
+<ActionButton
+  type="submit"
+  style={{
+    backgroundColor: "#cbf916de",
+    color: "#fff",
+  }}
+>
+  Save Asset
+</ActionButton>
         </div>
       </form>
     </Modal>
