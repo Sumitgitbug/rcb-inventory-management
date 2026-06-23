@@ -32,14 +32,28 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
-MYSQL_CONFIG = {
-    "host": os.getenv("MYSQL_HOST", "127.0.0.1"),
-    "port": _env_int("MYSQL_PORT", 3306),
-    "user": os.getenv("MYSQL_USER", "root"),
-    "password": os.getenv("MYSQL_PASSWORD", ""),
-    "database": os.getenv("MYSQL_DATABASE", "inventory_management"),
-    "autocommit": False,
-}
+def _env_secret(name: str) -> str:
+    file_path = os.getenv(f"{name}_FILE", "").strip()
+    if file_path:
+        try:
+            return Path(file_path).read_text(encoding="utf-8").strip()
+        except OSError:
+            return ""
+    return os.getenv(name, "")
+
+
+def _mysql_config() -> dict:
+    return {
+        "host": os.getenv("MYSQL_HOST", "127.0.0.1"),
+        "port": _env_int("MYSQL_PORT", 3306),
+        "user": os.getenv("MYSQL_USER", "root"),
+        "password": _env_secret("MYSQL_PASSWORD"),
+        "database": os.getenv("MYSQL_DATABASE", "inventory_management"),
+        "autocommit": False,
+    }
+
+
+MYSQL_CONFIG = _mysql_config()
 
 I_NOTE_API_BASE_URL = "https://ercb.rcb.ac.in/new/api/i-note-records.php"
 I_NOTE_DETAIL_API_URL = "https://ercb.rcb.ac.in/new/api/i-note.php"
