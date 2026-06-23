@@ -1,5 +1,11 @@
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:5000").replace(/\/$/, "")
 
+function getAuthHeader() {
+  if (typeof window === "undefined") return {}
+  const token = window.localStorage.getItem("inventory.authToken.v1")
+  return token ? { Authorization: `Bearer ${token}` } : {}
+}
+
 export async function fetchINoteRecords(page = 1, limit = 10, term = "", group = "") {
   const params = new URLSearchParams({
     page: String(page),
@@ -12,6 +18,7 @@ export async function fetchINoteRecords(page = 1, limit = 10, term = "", group =
     method: "GET",
     headers: {
       Accept: "application/json",
+      ...getAuthHeader(),
     },
   })  
 
@@ -33,6 +40,7 @@ export async function fetchINoteDetail(iNote) {
     method: "GET",
     headers: {
       Accept: "application/json",
+      ...getAuthHeader(),
     },
   })
 

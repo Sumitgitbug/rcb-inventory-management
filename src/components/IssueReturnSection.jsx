@@ -51,10 +51,12 @@ function IssueReturnSection({
       title="Issue / Return"
       description="Track issued assets, returned history, employee details, and return dates in one place."
       action={
-        <ActionButton onClick={onAddIssue}>
-          <Plus className="size-4" />
-          Issue Item
-        </ActionButton>
+        onAddIssue ? (
+          <ActionButton onClick={onAddIssue}>
+            <Plus className="size-4" />
+            Issue Item
+          </ActionButton>
+        ) : null
       }
     >
       <div className="flex h-full min-h-0 flex-col">
@@ -104,7 +106,7 @@ function IssueReturnSection({
                 <th className="px-4 py-3 font-medium">Issue Date</th>
                 <th className="px-4 py-3 font-medium">Return Date</th>
                 <th className="px-4 py-3 font-medium">Status</th>
-                <th className="px-4 py-3 font-medium">Action</th>
+                {onEditIssue || onReturnIssue ? <th className="px-4 py-3 font-medium">Action</th> : null}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 bg-white">
@@ -145,35 +147,41 @@ function IssueReturnSection({
                         ) : null}
                       </div>
                     </td>
-                    <td className="px-4 py-4 text-slate-700">
-                      <div className="flex flex-wrap gap-1.5">
-                        <button
-                          type="button"
-                          className="rounded bg-lime-900 px-2 py-1 text-xs font-semibold text-white transition hover:bg-lime-800"
-                          onClick={() => onEditIssue(issue)}
-                        >
-                          Edit
-                        </button>
-                        <button
-                          type="button"
-                          className={[
-                            "rounded px-2 py-1 text-xs font-semibold text-white transition",
-                            normalizeIssueStatus(issue.status) === "returned"
-                              ? "cursor-not-allowed bg-orange-300"
-                              : "bg-orange-600 hover:bg-orange-700",
-                          ].join(" ")}
-                          onClick={() => onReturnIssue(issue.id)}
-                          disabled={normalizeIssueStatus(issue.status) === "returned"}
-                        >
-                          Return
-                        </button>
-                      </div>
-                    </td>
+                    {onEditIssue || onReturnIssue ? (
+                      <td className="px-4 py-4 text-slate-700">
+                        <div className="flex flex-wrap gap-1.5">
+                          {onEditIssue ? (
+                            <button
+                              type="button"
+                              className="rounded bg-lime-900 px-2 py-1 text-xs font-semibold text-white transition hover:bg-lime-800"
+                              onClick={() => onEditIssue(issue)}
+                            >
+                              Edit
+                            </button>
+                          ) : null}
+                          {onReturnIssue ? (
+                            <button
+                              type="button"
+                              className={[
+                                "rounded px-2 py-1 text-xs font-semibold text-white transition",
+                                normalizeIssueStatus(issue.status) === "returned"
+                                  ? "cursor-not-allowed bg-orange-300"
+                                  : "bg-orange-600 hover:bg-orange-700",
+                              ].join(" ")}
+                              onClick={() => onReturnIssue(issue.id)}
+                              disabled={normalizeIssueStatus(issue.status) === "returned"}
+                            >
+                              Return
+                            </button>
+                          ) : null}
+                        </div>
+                      </td>
+                    ) : null}
                   </tr>
                 ))
               ) : (
                 <tr>
-                  <td colSpan={8} className="px-4 py-8 text-center text-sm text-slate-500">
+                  <td colSpan={onEditIssue || onReturnIssue ? 8 : 7} className="px-4 py-8 text-center text-sm text-slate-500">
                     No {issueStatusFilter !== "all" ? issueStatusFilter : ""} records found.
                   </td>
                 </tr>

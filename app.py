@@ -2,22 +2,27 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 from urllib import error as urlerror
 from urllib import parse as urlparse
 from urllib import request as urlrequest
 from contextlib import contextmanager
 from datetime import datetime
+from functools import wraps
 from pathlib import Path
 
 import mysql.connector
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from dotenv import load_dotenv
+from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
+from werkzeug.security import check_password_hash, generate_password_hash
 
 
 load_dotenv()
 
 STATE_FILE = Path.home() / ".inventory_management" / "inventory_state.json"
+AUTH_FILE = Path.home() / ".inventory_management" / "auth_users.json"
 
 
 def _env_int(name: str, default: int) -> int:
@@ -39,12 +44,14 @@ MYSQL_CONFIG = {
 I_NOTE_API_BASE_URL = "https://ercb.rcb.ac.in/new/api/i-note-records.php"
 I_NOTE_DETAIL_API_URL = "https://ercb.rcb.ac.in/new/api/i-note.php"
 I_NOTE_API_KEY = os.getenv("INOTE_API_KEY", "").strip()
+AUTH_TOKEN_MAX_AGE_SECONDS = _env_int("AUTH_TOKEN_MAX_AGE_SECONDS", 12 * 60 * 60)
 
 
 def create_app() -> Flask:
     app = Flask(__name__)
     CORS(app, resources={r"/api/*": {"origins": "*"}})
     app.config["JSON_SORT_KEYS"] = False
+    app.config["SECRET_KEY"] = os.getenv("FLASK_SECRET_KEY") or secrets.token_hex(32)
     return app
 
 
@@ -133,6 +140,26 @@ def _save_file_state(state: dict) -> None:
         STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
         with STATE_FILE.open("w", encoding="utf-8") as handle:
             json.dump(state, handle, ensure_ascii=False, indent=2)
+    except OSError:
+        pass
+
+
+def _load_auth_file() -> list[dict]:
+    if not AUTH_FILE.exists():
+        return []
+    try:
+        with AUTH_FILE.open("r", encoding="utf-8") as handle:
+            data = json.load(handle)
+            return data if isinstance(data, list) else []
+    except (OSError, json.JSONDecodeError):
+        return []
+
+
+def _save_auth_file(users: list[dict]) -> None:
+    try:
+        AUTH_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with AUTH_FILE.open("w", encoding="utf-8") as handle:
+            json.dump(users, handle, ensure_ascii=False, indent=2)
     except OSError:
         pass
 
@@ -274,10 +301,335 @@ def _ensure_schema() -> None:
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """
         )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                username VARCHAR(80) NOT NULL UNIQUE,
+                password_hash VARCHAR(255) NOT NULL,
+                role_name VARCHAR(30) NOT NULL DEFAULT 'user',
+                allowed_types JSON NOT NULL,
+                full_name VARCHAR(150) DEFAULT '',
+                is_active TINYINT(1) NOT NULL DEFAULT 1,
+                created_at DATETIME NOT NULL,
+                updated_at DATETIME NOT NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            """
+        )
+        try:
+            cursor.execute("ALTER TABLE users ADD COLUMN allowed_types JSON NULL")
+        except mysql.connector.Error as exc:
+            if exc.errno != 1060:
+                raise
         connection.commit()
         cursor.close()
     finally:
         connection.close()
+
+
+def _auth_serializer() -> URLSafeTimedSerializer:
+    return URLSafeTimedSerializer(app.config["SECRET_KEY"], salt="inventory-auth-token")
+
+
+def _normalize_allowed_types(value) -> list[str]:
+    if value in (None, ""):
+        return []
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            value = [part.strip() for part in value.split(",")]
+    if not isinstance(value, list):
+        return []
+    seen = set()
+    normalized = []
+    for item in value:
+        text = str(item or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        normalized.append(text)
+    return normalized
+
+
+def _normalize_role(value) -> str:
+    role = str(value or "user").strip().lower()
+    if role == "viewer":
+        return "user"
+    if role not in {"admin", "user"}:
+        return "user"
+    return role
+
+
+def _public_user(row: dict | None) -> dict | None:
+    if not row:
+        return None
+    role = _normalize_role(row["role_name"])
+    return {
+        "username": row["username"],
+        "role": role,
+        "fullName": row.get("full_name") or "",
+        "allowedTypes": [] if role == "admin" else _normalize_allowed_types(row.get("allowed_types")),
+    }
+
+
+def _make_auth_token(user: dict) -> str:
+    return _auth_serializer().dumps({
+        "username": user["username"],
+        "role": _normalize_role(user["role_name"]),
+        "allowedTypes": _normalize_allowed_types(user.get("allowed_types")),
+    })
+
+
+def _user_count() -> int:
+    try:
+        connection = _database_connection()
+        try:
+            cursor = connection.cursor()
+            cursor.execute("SELECT COUNT(*) FROM users")
+            count = int(cursor.fetchone()[0])
+            cursor.close()
+            return count or len(_load_auth_file())
+        finally:
+            connection.close()
+    except mysql.connector.Error:
+        return len(_load_auth_file())
+
+
+def _load_user(username: str) -> dict | None:
+    try:
+        connection = _database_connection()
+        try:
+            cursor = connection.cursor(dictionary=True)
+            cursor.execute(
+                """
+                SELECT username, password_hash, role_name, allowed_types, full_name, is_active
+                FROM users
+                WHERE username = %s
+                LIMIT 1
+                """,
+                (username,),
+            )
+            row = cursor.fetchone()
+            cursor.close()
+            if row:
+                return row
+        finally:
+            connection.close()
+    except mysql.connector.Error:
+        pass
+    normalized = username.strip().lower()
+    for user in _load_auth_file():
+        if str(user.get("username", "")).strip().lower() == normalized:
+            return user
+    return None
+
+
+def _create_user(username: str, password: str, role: str = "user", full_name: str = "", allowed_types=None) -> dict:
+    now = datetime.utcnow()
+    role = _normalize_role(role)
+    normalized_allowed_types = _normalize_allowed_types(allowed_types)
+    try:
+        connection = _database_connection()
+        try:
+            cursor = connection.cursor()
+            cursor.execute(
+                """
+                INSERT INTO users (
+                    username, password_hash, role_name, allowed_types, full_name, is_active, created_at, updated_at
+                ) VALUES (%s, %s, %s, %s, %s, 1, %s, %s)
+                """,
+                (
+                    username,
+                    generate_password_hash(password),
+                    role,
+                    json.dumps(normalized_allowed_types),
+                    full_name,
+                    now,
+                    now,
+                ),
+            )
+            connection.commit()
+            cursor.close()
+        finally:
+            connection.close()
+    except mysql.connector.Error:
+        users = _load_auth_file()
+        normalized = username.strip().lower()
+        if any(str(user.get("username", "")).strip().lower() == normalized for user in users):
+            raise ValueError("username already exists")
+        users.append({
+            "username": username,
+            "password_hash": generate_password_hash(password),
+            "role_name": role,
+            "allowed_types": normalized_allowed_types,
+            "full_name": full_name,
+            "is_active": 1,
+            "created_at": _serialize_datetime(now),
+            "updated_at": _serialize_datetime(now),
+        })
+        _save_auth_file(users)
+    return {
+        "username": username,
+        "role_name": role,
+        "full_name": full_name,
+        "allowed_types": normalized_allowed_types,
+        "is_active": 1,
+    }
+
+
+def _list_users() -> list[dict]:
+    try:
+        connection = _database_connection()
+        try:
+            cursor = connection.cursor(dictionary=True)
+            cursor.execute(
+                """
+                SELECT username, role_name, allowed_types, full_name, is_active, created_at, updated_at
+                FROM users
+                ORDER BY created_at DESC
+                """
+            )
+            rows = cursor.fetchall()
+            cursor.close()
+            if rows:
+                return rows
+        finally:
+            connection.close()
+    except mysql.connector.Error:
+        pass
+    return _load_auth_file()
+
+
+def _update_user(username: str, *, role: str | None = None, full_name: str | None = None, allowed_types=None, is_active: int | None = None, password: str | None = None) -> dict | None:
+    now = datetime.utcnow()
+    normalized_allowed_types = _normalize_allowed_types(allowed_types) if allowed_types is not None else None
+    try:
+        connection = _database_connection()
+        try:
+            assignments = []
+            values = []
+            if role is not None:
+                assignments.append("role_name = %s")
+                values.append(role)
+            if normalized_allowed_types is not None:
+                assignments.append("allowed_types = %s")
+                values.append(json.dumps(normalized_allowed_types))
+            if full_name is not None:
+                assignments.append("full_name = %s")
+                values.append(full_name)
+            if is_active is not None:
+                assignments.append("is_active = %s")
+                values.append(int(is_active))
+            if password is not None:
+                assignments.append("password_hash = %s")
+                values.append(generate_password_hash(password))
+            assignments.append("updated_at = %s")
+            values.append(now)
+            values.append(username)
+            cursor = connection.cursor()
+            cursor.execute(
+                f"UPDATE users SET {', '.join(assignments)} WHERE username = %s",
+                tuple(values),
+            )
+            connection.commit()
+            changed = cursor.rowcount
+            cursor.close()
+            if changed:
+                return _load_user(username)
+        finally:
+            connection.close()
+    except mysql.connector.Error:
+        pass
+
+    users = _load_auth_file()
+    normalized = username.strip().lower()
+    updated = None
+    for user in users:
+        if str(user.get("username", "")).strip().lower() != normalized:
+            continue
+        if role is not None:
+            user["role_name"] = role
+        if normalized_allowed_types is not None:
+            user["allowed_types"] = normalized_allowed_types
+        if full_name is not None:
+            user["full_name"] = full_name
+        if is_active is not None:
+            user["is_active"] = int(is_active)
+        if password is not None:
+            user["password_hash"] = generate_password_hash(password)
+        user["updated_at"] = _serialize_datetime(now)
+        updated = user
+        break
+    if updated:
+        _save_auth_file(users)
+    return updated
+
+
+def _delete_user(username: str) -> bool:
+    try:
+        connection = _database_connection()
+        try:
+            cursor = connection.cursor()
+            cursor.execute("DELETE FROM users WHERE username = %s", (username,))
+            connection.commit()
+            deleted = cursor.rowcount > 0
+            cursor.close()
+            if deleted:
+                return True
+        finally:
+            connection.close()
+    except mysql.connector.Error:
+        pass
+
+    users = _load_auth_file()
+    normalized = username.strip().lower()
+    next_users = [user for user in users if str(user.get("username", "")).strip().lower() != normalized]
+    if len(next_users) == len(users):
+        return False
+    _save_auth_file(next_users)
+    return True
+
+
+def _token_user() -> dict | None:
+    auth_header = request.headers.get("Authorization", "")
+    scheme, _, token = auth_header.partition(" ")
+    if scheme.lower() != "bearer" or not token.strip():
+        return None
+    try:
+        payload = _auth_serializer().loads(token.strip(), max_age=AUTH_TOKEN_MAX_AGE_SECONDS)
+    except (BadSignature, SignatureExpired):
+        return None
+    user = _load_user(str(payload.get("username", "")))
+    if not user or not int(user.get("is_active") or 0):
+        return None
+    return user
+
+
+def require_auth(view):
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        user = _token_user()
+        if not user:
+            return jsonify({"error": "authentication required"}), 401
+        request.environ["inventory_user"] = user
+        return view(*args, **kwargs)
+    return wrapped
+
+
+def require_role(*roles):
+    allowed = set(roles)
+
+    def decorator(view):
+        @require_auth
+        @wraps(view)
+        def wrapped(*args, **kwargs):
+            user = request.environ.get("inventory_user")
+            if _normalize_role(user.get("role_name")) not in allowed:
+                return jsonify({"error": "permission denied"}), 403
+            return view(*args, **kwargs)
+        return wrapped
+    return decorator
 
 
 def _parse_date(value):
@@ -594,6 +946,124 @@ def _save_state(state):
         connection.close()
 
 
+def _allowed_counter_prefixes(allowed: set[str], catalog: dict) -> set[str]:
+    prefixes = set(allowed)
+    for item in catalog.get("types", []) or []:
+        if item.get("value") in allowed or item.get("label") in allowed:
+            prefixes.update(part for part in (item.get("value"), item.get("label"), item.get("code")) if part)
+    return prefixes
+
+
+def _filter_state_for_user(state: dict, user: dict | None) -> dict:
+    if not user or _normalize_role(user.get("role_name")) == "admin":
+        return state
+    allowed = set(_normalize_allowed_types(user.get("allowed_types")))
+    if not allowed:
+        return {**state, "assets": [], "issues": []}
+
+    assets = [asset for asset in state.get("assets", []) if asset.get("type") in allowed]
+    asset_ids = {asset.get("assetId") for asset in assets}
+    issues = [issue for issue in state.get("issues", []) if issue.get("assetId") in asset_ids]
+
+    catalog = state.get("catalog") or {}
+    filtered_catalog = {
+        **catalog,
+        "types": [item for item in catalog.get("types", []) if item.get("value") in allowed or item.get("label") in allowed],
+        "categoriesByType": {
+            key: value for key, value in (catalog.get("categoriesByType") or {}).items() if key in allowed
+        },
+        "subCategoriesByTypeAndCategory": {
+            key: value for key, value in (catalog.get("subCategoriesByTypeAndCategory") or {}).items() if key in allowed
+        },
+    }
+    allowed_counter_prefixes = _allowed_counter_prefixes(allowed, catalog)
+    filtered_counters = {
+        key: value
+        for key, value in (state.get("counters") or {}).items()
+        if key.split(":", 1)[0] in allowed_counter_prefixes
+    }
+
+    return {
+        **state,
+        "assets": assets,
+        "issues": issues,
+        "catalog": filtered_catalog,
+        "counters": filtered_counters,
+    }
+
+
+def _merge_state_for_user(current_state: dict, submitted_state: dict, user: dict) -> dict:
+    if _normalize_role(user.get("role_name")) == "admin":
+        return submitted_state
+
+    allowed = set(_normalize_allowed_types(user.get("allowed_types")))
+    if not allowed:
+        return current_state
+
+    submitted_assets = [
+        asset for asset in submitted_state.get("assets", [])
+        if asset.get("type") in allowed
+    ]
+    submitted_allowed_asset_ids = {asset.get("assetId") for asset in submitted_assets}
+
+    preserved_assets = [
+        asset for asset in current_state.get("assets", [])
+        if asset.get("type") not in allowed
+    ]
+    current_allowed_asset_ids = {
+        asset.get("assetId")
+        for asset in current_state.get("assets", [])
+        if asset.get("type") in allowed
+    }
+
+    submitted_issues = [
+        issue for issue in submitted_state.get("issues", [])
+        if issue.get("assetId") in submitted_allowed_asset_ids
+    ]
+    preserved_issues = [
+        issue for issue in current_state.get("issues", [])
+        if issue.get("assetId") not in current_allowed_asset_ids
+    ]
+
+    current_catalog = current_state.get("catalog") or {}
+    submitted_catalog = submitted_state.get("catalog") or {}
+    merged_categories = dict(current_catalog.get("categoriesByType") or {})
+    for type_name in allowed:
+        if type_name in (submitted_catalog.get("categoriesByType") or {}):
+            merged_categories[type_name] = submitted_catalog["categoriesByType"][type_name]
+    merged_subcategories = dict(current_catalog.get("subCategoriesByTypeAndCategory") or {})
+    for type_name in allowed:
+        if type_name in (submitted_catalog.get("subCategoriesByTypeAndCategory") or {}):
+            merged_subcategories[type_name] = submitted_catalog["subCategoriesByTypeAndCategory"][type_name]
+
+    merged_catalog = {
+        **current_catalog,
+        "types": current_catalog.get("types") or submitted_catalog.get("types") or [],
+        "categoriesByType": merged_categories,
+        "subCategoriesByTypeAndCategory": merged_subcategories,
+    }
+    allowed_counter_prefixes = (
+        _allowed_counter_prefixes(allowed, current_catalog)
+        | _allowed_counter_prefixes(allowed, submitted_catalog)
+    )
+    submitted_counters = submitted_state.get("counters") or {}
+    scoped_counters = {
+        key: value
+        for key, value in submitted_counters.items()
+        if key.split(":", 1)[0] in allowed_counter_prefixes
+    }
+
+    return {
+        **current_state,
+        "assets": submitted_assets + preserved_assets,
+        "employees": submitted_state.get("employees", current_state.get("employees", [])),
+        "issues": submitted_issues + preserved_issues,
+        "notes": submitted_state.get("notes", current_state.get("notes", [])),
+        "catalog": merged_catalog,
+        "counters": {**(current_state.get("counters") or {}), **scoped_counters},
+    }
+
+
 @app.before_request
 def _bootstrap_schema():
     if request.path.startswith("/api/"):
@@ -620,19 +1090,169 @@ def index():
     )
 
 
+@app.get("/api/auth/status")
+def auth_status():
+    try:
+        return jsonify({"setupRequired": _user_count() == 0})
+    except mysql.connector.Error as exc:
+        return jsonify({"setupRequired": True, "databaseUnavailable": True, "error": str(exc)}), 503
+
+
+@app.post("/api/auth/setup")
+def auth_setup():
+    payload = request.get_json(silent=True) or {}
+    username = str(payload.get("username") or "").strip()
+    password = str(payload.get("password") or "")
+    full_name = str(payload.get("fullName") or "").strip()
+
+    if not username or len(password) < 8:
+        return jsonify({"error": "username and an 8+ character password are required"}), 400
+
+    try:
+        if _user_count() > 0:
+            return jsonify({"error": "setup already completed"}), 409
+        user = _create_user(username=username, password=password, role="admin", full_name=full_name)
+    except (mysql.connector.Error, ValueError) as exc:
+        return jsonify({"error": str(exc)}), 500
+
+    return jsonify({
+        "token": _make_auth_token(user),
+        "user": _public_user(user),
+    }), 201
+
+
+@app.post("/api/auth/login")
+def auth_login():
+    payload = request.get_json(silent=True) or {}
+    username = str(payload.get("username") or "").strip()
+    password = str(payload.get("password") or "")
+
+    if not username or not password:
+        return jsonify({"error": "username and password are required"}), 400
+
+    try:
+        user = _load_user(username)
+    except mysql.connector.Error as exc:
+        return jsonify({"error": str(exc)}), 500
+
+    if not user or not int(user.get("is_active") or 0) or not check_password_hash(user["password_hash"], password):
+        return jsonify({"error": "invalid username or password"}), 401
+
+    return jsonify({
+        "token": _make_auth_token(user),
+        "user": _public_user(user),
+    })
+
+
+@app.get("/api/auth/me")
+@require_auth
+def auth_me():
+    return jsonify({"user": _public_user(request.environ.get("inventory_user"))})
+
+
+@app.get("/api/users")
+@require_role("admin")
+def list_users():
+    return jsonify({
+        "users": [_public_user(user) | {"active": bool(int(user.get("is_active", 1) or 0))} for user in _list_users()]
+    })
+
+
+@app.post("/api/users")
+@require_role("admin")
+def create_user():
+    payload = request.get_json(silent=True) or {}
+    username = str(payload.get("username") or "").strip()
+    password = str(payload.get("password") or "")
+    full_name = str(payload.get("fullName") or "").strip()
+    role = _normalize_role(payload.get("role") or "user")
+    allowed_types = _normalize_allowed_types(payload.get("allowedTypes"))
+    if role not in {"admin", "user"}:
+        return jsonify({"error": "role must be admin or user"}), 400
+    if role == "user" and not allowed_types:
+        return jsonify({"error": "select at least one allowed asset type for user accounts"}), 400
+    if not username or len(password) < 8:
+        return jsonify({"error": "username and an 8+ character password are required"}), 400
+    try:
+        if _load_user(username):
+            return jsonify({"error": "username already exists"}), 409
+        user = _create_user(username=username, password=password, role=role, full_name=full_name, allowed_types=[] if role == "admin" else allowed_types)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 409
+    except mysql.connector.Error as exc:
+        return jsonify({"error": str(exc)}), 500
+    return jsonify({"user": _public_user(user) | {"active": True}}), 201
+
+
+@app.patch("/api/users/<path:username>")
+@require_role("admin")
+def update_user(username):
+    payload = request.get_json(silent=True) or {}
+    current_user = request.environ.get("inventory_user", {})
+    role = payload.get("role")
+    active = payload.get("active")
+    full_name = payload.get("fullName")
+    allowed_types = payload.get("allowedTypes")
+    next_role = _normalize_role(role) if role is not None else None
+    if next_role is not None and next_role not in {"admin", "user"}:
+        return jsonify({"error": "role must be admin or user"}), 400
+    normalized_allowed_types = _normalize_allowed_types(allowed_types) if allowed_types is not None else None
+    if next_role == "user" and normalized_allowed_types is not None and not normalized_allowed_types:
+        return jsonify({"error": "select at least one allowed asset type for user accounts"}), 400
+    if active is False and username == current_user.get("username"):
+        return jsonify({"error": "you cannot disable your own account"}), 400
+    user = _update_user(
+        username,
+        role=next_role,
+        full_name=str(full_name).strip() if full_name is not None else None,
+        allowed_types=[] if next_role == "admin" else normalized_allowed_types,
+        is_active=1 if active is True else 0 if active is False else None,
+    )
+    if not user:
+        return jsonify({"error": "user not found"}), 404
+    return jsonify({"user": _public_user(user) | {"active": bool(int(user.get("is_active", 1) or 0))}})
+
+
+@app.post("/api/users/<path:username>/reset-password")
+@require_role("admin")
+def reset_user_password(username):
+    payload = request.get_json(silent=True) or {}
+    password = str(payload.get("password") or "")
+    if len(password) < 8:
+        return jsonify({"error": "new password must be at least 8 characters"}), 400
+    user = _update_user(username, password=password)
+    if not user:
+        return jsonify({"error": "user not found"}), 404
+    return jsonify({"status": "password reset"})
+
+
+@app.delete("/api/users/<path:username>")
+@require_role("admin")
+def delete_user(username):
+    current_user = request.environ.get("inventory_user", {})
+    if username == current_user.get("username"):
+        return jsonify({"error": "you cannot delete your own account"}), 400
+    if not _delete_user(username):
+        return jsonify({"error": "user not found"}), 404
+    return jsonify({"status": "deleted"})
+
+
 @app.get("/api/inventory")
+@require_auth
 def get_inventory():
     try:
-        return jsonify(_load_state())
+        return jsonify(_filter_state_for_user(_load_state(), request.environ.get("inventory_user")))
     except mysql.connector.Error as exc:
         return jsonify({"error": str(exc)}), 500
 
 
 @app.put("/api/inventory")
+@require_role("admin", "user")
 def put_inventory():
     payload = request.get_json(silent=True) or _default_state()
     try:
-        _save_state(payload)
+        user = request.environ.get("inventory_user")
+        _save_state(_merge_state_for_user(_load_state(), payload, user))
         return jsonify({"status": "saved"})
     except mysql.connector.Error as exc:
         return jsonify({"error": str(exc)}), 500
@@ -702,6 +1322,7 @@ def _inote_group(note: dict) -> str:
 
 
 @app.get("/api/i-note-records")
+@require_auth
 def proxy_i_note_records():
     if not I_NOTE_API_KEY:
         return jsonify({"error": "missing i-note api key"}), 500
@@ -772,6 +1393,7 @@ def proxy_i_note_records():
 
 
 @app.get("/api/get-i-note")
+@require_auth
 def proxy_get_i_note():
     if not I_NOTE_API_KEY:
         return jsonify({"error": "missing i-note api key"}), 500

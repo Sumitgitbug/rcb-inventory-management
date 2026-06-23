@@ -110,44 +110,47 @@ function DocumentItemRow({ item, index, noteNo, noteMeta, record, onAddAssetFrom
   const acceptedQuantity = getINoteAcceptedQuantity(item)
   const acceptedQuantityText = formatQuantityValue(acceptedQuantity)
   const canCreateAsset = typeof onAddAssetFromINote === "function" && parseINoteQuantity(acceptedQuantity) > 0
+  const addAssetFromItem = () => {
+    onAddAssetFromINote(
+      buildINoteAssetPrefill({
+        noteNo,
+        noteMeta,
+        record,
+        item,
+        acceptedQuantity,
+      }),
+    )
+  }
 
   return (
     <tr className="align-top">
-      <td className="pr-4 py-1.5 text-[15px]">{item?.sr_no ?? index + 1}</td>
-      <td className="pr-4 py-1.5 text-[15px]">
+      <td className="border border-slate-400 px-3 py-2 text-center text-[15px]">{item?.sr_no ?? index + 1}</td>
+      <td className="border border-slate-400 px-3 py-2 text-[15px]">
         {getItemValue(item, ["item_desc", "description", "item_description", "desc", "particulars"]) || "-"}
       </td>
-      <td className="pr-4 py-1.5 text-[15px]">
+      <td className="border border-slate-400 px-3 py-2 text-center text-[15px]">
         {formatQuantityValue(getItemValue(item, ["qty_tendered", "quantity_tendered", "tendered_qty", "tender_qty", "qty", "quantity"]))}
       </td>
-      <td className="pr-4 py-1.5 text-[15px]">
+      <td className="border border-slate-400 px-3 py-2 text-center text-[15px]">
+        {acceptedQuantityText}
+      </td>
+      <td className="border border-slate-400 px-3 py-2 text-center text-[15px]">
+        {formatQuantityValue(getItemValue(item, ["rejected_balance", "rejected_balance_qty", "balance", "balance_qty", "rejected_qty", "rejected"]))}
+      </td>
+      <td className="border border-slate-400 px-3 py-2 text-center text-[15px]">
         {canCreateAsset ? (
           <button
             type="button"
-            onClick={() =>
-              onAddAssetFromINote(
-                buildINoteAssetPrefill({
-                  noteNo,
-                  noteMeta,
-                  record,
-                  item,
-                  acceptedQuantity,
-                }),
-              )
-            }
-            className="font-semibold text-blue-700 underline-offset-4 transition hover:text-blue-900 hover:underline"
-            title="Add asset from accepted quantity"
+            onClick={addAssetFromItem}
+            className="inline-flex items-center justify-center rounded-md bg-blue-700 px-2.5 py-1 text-xs font-semibold text-white transition hover:bg-blue-800"
+            title="Add asset from this I-Note item"
           >
-            {acceptedQuantityText}
+            Add Asset
           </button>
         ) : (
-          acceptedQuantityText
+          "-"
         )}
       </td>
-      <td className="pr-4 py-1.5 text-[15px]">
-        {formatQuantityValue(getItemValue(item, ["rejected_balance", "rejected_balance_qty", "balance", "balance_qty", "rejected_qty", "rejected"]))}
-      </td>
-      <td className="py-1.5 text-[15px]">{getItemValue(item, ["remarks", "remark"]) || "-"}</td>
     </tr>
   )
 }
@@ -192,15 +195,15 @@ function INoteInlineDetail({ noteNo, noteMeta = {}, payload, loading, error, loa
             <DocumentLine index={5} leftLabel="Invoice / Challan No." leftValue={getDetailValue(record, ["invoice_no", "invoiceNo", "challan_no", "challanNo"])} rightLabel="Date" rightValue={invoiceDate} />
           </div>
           <div className="mt-10 overflow-x-auto">
-            <table className="min-w-full border-collapse text-left">
+            <table className="min-w-full border-collapse border border-slate-400 text-left">
               <thead>
                 <tr className="text-[15px] font-normal">
-                  <th className="pr-4 pb-3">S. No.</th>
-                  <th className="pr-4 pb-3">Name of Articles</th>
-                  <th className="pr-4 pb-3">Quantity Tendered</th>
-                  <th className="pr-4 pb-3">Quantity Accepted</th>
-                  <th className="pr-4 pb-3">Quantity Rejected / Balance</th>
-                  <th className="pb-3">Remarks</th>
+                  <th className="w-[72px] border border-slate-400 px-3 py-2 text-center align-bottom">S. No.</th>
+                  <th className="border border-slate-400 px-3 py-2 align-bottom">Name of Articles</th>
+                  <th className="w-[150px] border border-slate-400 px-3 py-2 text-center align-bottom">Quantity Tendered</th>
+                  <th className="w-[150px] border border-slate-400 px-3 py-2 text-center align-bottom">Quantity Accepted</th>
+                  <th className="w-[190px] border border-slate-400 px-3 py-2 text-center align-bottom">Quantity Rejected / Balance</th>
+                  <th className="w-[120px] border border-slate-400 px-3 py-2 text-center align-bottom">Remarks</th>
                 </tr>
               </thead>
               <tbody>
@@ -218,7 +221,7 @@ function INoteInlineDetail({ noteNo, noteMeta = {}, payload, loading, error, loa
                   ))
                 ) : (
                   <tr>
-                    <td className="py-6 text-sm text-slate-500" colSpan={6}>No item rows found in the response.</td>
+                    <td className="border border-slate-400 px-3 py-6 text-sm text-slate-500" colSpan={6}>No item rows found in the response.</td>
                   </tr>
                 )}
               </tbody>

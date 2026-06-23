@@ -1,5 +1,5 @@
 ﻿import { useEffect, useMemo, useState } from "react"
-import { ArrowLeftRight, CircleCheckBig, Eye, FileText, Package, Plus, Search, Upload, Users } from "lucide-react"
+import { ArrowLeftRight, CircleCheckBig, Eye, Package, Plus, Search, Upload } from "lucide-react"
 import Sidebar from "@/components/Sidebar"
 import Modal from "@/components/Modal"
 import campusImage from "@/assets/rcb-campus.jpg"
@@ -19,18 +19,20 @@ import { generateAssetId, loadInventoryState, saveInventoryState } from "@/lib/i
 import { ActionButton, StatCard, SectionShell } from "@/components/dashboard-ui"
 import AssetsSection from "@/components/AssetsSection"
 import INoteSection from "@/components/INoteSection"
-import StocksSection from "@/components/StocksSection"
 import EmployeesSection from "@/components/EmployeesSection"
 import IssueReturnSection from "@/components/IssueReturnSection"
+import UserManagementSection from "@/components/UserManagementSection"
 
 const ACTIVE_SECTION_STORAGE_KEY = "inventory.activeSection"
-const SECTION_IDS = new Set(["dashboard", "assets", "stocks", "employees", "i-note", "issue-return"])
+const SECTION_IDS = new Set(["dashboard", "assets", "employees", "i-note", "issue-return", "users"])
 
 function readInitialSection() {
   if (typeof window === "undefined") return "dashboard"
   const hashSection = String(window.location.hash || "").replace(/^#/, "").trim()
+  if (hashSection === "stocks") return "assets"
   if (SECTION_IDS.has(hashSection)) return hashSection
   const storedSection = window.localStorage.getItem(ACTIVE_SECTION_STORAGE_KEY)
+  if (storedSection === "stocks") return "assets"
   if (SECTION_IDS.has(storedSection)) return storedSection
   return "dashboard"
 }
@@ -201,11 +203,10 @@ function downloadTextFile(filename, content, mimeType = "text/plain;charset=utf-
   window.setTimeout(() => URL.revokeObjectURL(url), 0)
 }
 
-function InventoryDashboard() {
+function InventoryDashboard({ currentUser, onLogout }) {
   const initial = loadInventoryState()
   const [inventory, setInventory] = useState(initial)
   const [activeSection, setActiveSection] = useState(readInitialSection)
-  const [searchTerm, setSearchTerm] = useState("")
   const [stocksSearchTerm, setStocksSearchTerm] = useState("")
   const [activeStocksTab, setActiveStocksTab] = useState("IT")
   const [issueStatusFilter, setIssueStatusFilter] = useState("all")
@@ -228,6 +229,9 @@ function InventoryDashboard() {
   const [employeeSearchTerm, setEmployeeSearchTerm] = useState("")
   const [showAssetDropdown, setShowAssetDropdown] = useState(false)
   const [showEmployeeDropdown, setShowEmployeeDropdown] = useState(false)
+  const isAdmin = currentUser?.role === "admin"
+  const canManage = currentUser?.role === "admin" || currentUser?.role === "user"
+  const visibleSection = !isAdmin && activeSection === "users" ? "dashboard" : activeSection
 
   const catalog = useMemo(
     () => normalizeCatalog(inventory.catalog ?? createDefaultCatalog()),
@@ -236,16 +240,20 @@ function InventoryDashboard() {
 
   useEffect(() => {
     if (typeof window === "undefined") return
-    window.localStorage.setItem(ACTIVE_SECTION_STORAGE_KEY, activeSection)
+    window.localStorage.setItem(ACTIVE_SECTION_STORAGE_KEY, visibleSection)
     const nextUrl = new URL(window.location.href)
-    nextUrl.hash = activeSection === "dashboard" ? "" : activeSection
+    nextUrl.hash = visibleSection === "dashboard" ? "" : visibleSection
     window.history.replaceState({}, "", `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`)
-  }, [activeSection])
+  }, [visibleSection])
 
   useEffect(() => {
     if (typeof window === "undefined") return
     const syncSectionFromLocation = () => {
       const nextHash = String(window.location.hash || "").replace(/^#/, "").trim()
+      if (nextHash === "stocks") {
+        setActiveSection("assets")
+        return
+      }
       if (SECTION_IDS.has(nextHash) && nextHash !== activeSection) {
         setActiveSection(nextHash)
       }
@@ -317,12 +325,11 @@ function InventoryDashboard() {
     [assets],
   )
 
-  const stockQuantityTotal = useMemo(
-    () => stockAssets.reduce((total, asset) => total + (Number(asset.availableQuantity ?? 0) || 0), 0),
-    [stockAssets],
-  )
-
   const assetSubCategoryOptions = getSubCategoriesForTypeAndCategory(catalog, assetForm.type, assetForm.category)
+  const availableStockTypes = getTypeOptions(catalog).map((type) => type.value)
+  const effectiveActiveStocksTab = availableStockTypes.includes(activeStocksTab)
+    ? activeStocksTab
+    : availableStockTypes[0] || activeStocksTab
 
   const filteredAssets = useMemo(() => {
     if (!showAssetDropdown) return []
@@ -347,27 +354,26 @@ function InventoryDashboard() {
     )
   }, [employeeSearchTerm, showEmployeeDropdown, employees])
 
-  const counts = {
-    dashboard: "",
-    assets: assets.length,
-    stocks: stockQuantityTotal,
-    employees: employees.length,
-    "i-note": notes.length,
-    "issue-return": issues.length,
-  }
-
   const filteredStocks = useMemo(() => {
     const term = stocksSearchTerm.trim().toLowerCase()
-    const tabFiltered = stockAssets.filter((asset) => asset.type === activeStocksTab)
+    const tabFiltered = stockAssets.filter((asset) => asset.type === effectiveActiveStocksTab)
     const sorted = [...tabFiltered].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
     if (!term) return sorted
     return sorted.filter((asset) => {
       const serialText = (asset.serialNumbers ?? []).join(" ").toLowerCase()
-      return [asset.category, asset.subCategory, asset.make, asset.model, serialText, asset.invoiceNo, asset.assetId]
+      return [
+        asset.category,
+        asset.subCategory,
+        asset.make,
+        asset.model,
+        serialText,
+        asset.invoiceNo,
+        asset.assetId,
+      ]
         .filter(Boolean)
         .some((value) => value.toLowerCase().includes(term))
     })
-  }, [stockAssets, stocksSearchTerm, activeStocksTab])
+  }, [stockAssets, stocksSearchTerm, effectiveActiveStocksTab])
 
   function openAssetModal() {
     setEditingAssetId(null)
@@ -668,6 +674,7 @@ function InventoryDashboard() {
         warrantyDate: assetForm.warrantyDate,
         orderDate: assetForm.orderDate,
         supplyDate: assetForm.supplyDate,
+        sourceType: assets.find((asset) => asset.assetId === editingAssetId)?.sourceINoteNo ? "i-note" : "manual",
         sourceINoteNo: assets.find((asset) => asset.assetId === editingAssetId)?.sourceINoteNo || "",
         sourceINoteItemDescription: assets.find((asset) => asset.assetId === editingAssetId)?.sourceINoteItemDescription || "",
         createdAt: now,
@@ -716,6 +723,7 @@ function InventoryDashboard() {
         warrantyDate: assetForm.warrantyDate,
         orderDate: assetForm.orderDate,
         supplyDate: assetForm.supplyDate,
+        sourceType: assetPrefillSource?.noteNo ? "i-note" : "manual",
         sourceINoteNo: assetPrefillSource?.noteNo || "",
         sourceINoteItemDescription: assetPrefillSource?.itemDescription || "",
         createdAt: now,
@@ -811,20 +819,13 @@ function InventoryDashboard() {
     showSuccess("Asset deleted successfully.")
   }
 
-  function exportAssetsCsv() {
-    const csv = buildAssetsCsv(assetsWithAvailability, catalog)
-    const dateStamp = new Date().toISOString().slice(0, 10)
-    downloadTextFile(`sku_assets_export_${dateStamp}.csv`, csv, "text/csv;charset=utf-8")
-    showSuccess("CSV exported successfully.")
-  }
-
   function exportStocksCsv() {
-    const departmentAssets = stockAssets.filter((asset) => asset.type === activeStocksTab)
+    const departmentAssets = stockAssets.filter((asset) => asset.type === effectiveActiveStocksTab)
     const csv = buildStocksCsv(departmentAssets, catalog)
     const dateStamp = new Date().toISOString().slice(0, 10)
-    const fileName = `stocks_${String(activeStocksTab || "").toLowerCase()}_${dateStamp}.csv`
+    const fileName = `stocks_${String(effectiveActiveStocksTab || "").toLowerCase()}_${dateStamp}.csv`
     downloadTextFile(fileName, csv, "text/csv;charset=utf-8")
-    showSuccess(`${activeStocksTab} stocks CSV exported successfully.`)
+    showSuccess(`${effectiveActiveStocksTab} stocks CSV exported successfully.`)
   }
 
   function removeEmployee(employeeId) {
@@ -866,22 +867,17 @@ function InventoryDashboard() {
     setIssueModalOpen(true)
   }
 
+  const issuedCount = issues.filter((issue) => normalizeIssueStatus(issue.status) !== "returned").length
   const stats = [
-    { label: "Total Assets", value: assets.length, icon: Package },
-    { label: "Total Stock Records", value: assets.length, icon: FileText },
-    { label: "Employees", value: employees.length, icon: Users },
-    { label: "Issue Records", value: issues.length, icon: ArrowLeftRight },
+    { label: "Total No of Assets", value: assets.length, icon: Package },
+    { label: "Issued", value: issuedCount, icon: ArrowLeftRight },
   ]
-
-  let recentAssets = [...assets]
-  recentAssets.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
-  recentAssets = recentAssets.slice(0, 10)
 
   return (
     <div className="h-screen overflow-hidden bg-[#eef2f6] text-slate-900">
       {/* Use flex so the sidebar remains visible when expanded. */}
       <div className="flex h-full overflow-hidden">
-        <Sidebar activeSection={activeSection} onSectionChange={setActiveSection} counts={counts} />
+        <Sidebar activeSection={visibleSection} onSectionChange={setActiveSection} currentUser={currentUser} onLogout={onLogout} />
 
         <main className="flex h-full min-w-0 flex-1 flex-col overflow-hidden p-0">
           {toast ? (
@@ -901,8 +897,8 @@ function InventoryDashboard() {
           ) : null}
 
           <div className="flex h-full w-full min-w-0 flex-col">
-           {activeSection === "dashboard" ? (
-  <div className="relative flex-1 min-w-0 rounded-3xl overflow-hidden">
+           {visibleSection === "dashboard" ? (
+  <div className="relative flex-1 min-w-0 overflow-hidden">
     <img
       src={campusImage}
       alt="RCB Campus"
@@ -910,7 +906,7 @@ function InventoryDashboard() {
     />
     <div className="absolute inset-0 bg-gradient-to-b from-black/40 via-black/20 to-black/50" />
     <div className="relative z-10 flex h-full flex-col justify-between p-6 md:p-10">
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-2 xl:max-w-3xl">
         {stats.map((stat) => (
           <StatCard key={stat.label} {...stat} />
         ))}
@@ -940,51 +936,38 @@ function InventoryDashboard() {
     </div>
   </div>
 ) : null}
-            {activeSection === "assets" ? (
+            {visibleSection === "assets" ? (
               <AssetsSection
                 catalog={catalog}
-                filteredAssets={filteredAssets}
-                recentAssets={recentAssets}
-                searchTerm={searchTerm}
-                onSearchTermChange={setSearchTerm}
-                onAddAsset={openAssetModal}
-                onExportCsv={exportAssetsCsv}
-                onEditAsset={openEditAssetModal}
-                onIssueAsset={issueAsset}
-                onRemoveAsset={removeAsset}
-                onViewInvoice={setInvoicePreview}
-              />
-            ) : null}
-
-            {activeSection === "stocks" ? (
-              <StocksSection
-                catalog={catalog}
-                stockAssets={stockAssets}
                 filteredStocks={filteredStocks}
                 assetsWithAvailability={assetsWithAvailability}
-                activeStocksTab={activeStocksTab}
+                activeStocksTab={effectiveActiveStocksTab}
                 onActiveStocksTabChange={setActiveStocksTab}
-                onExportCsv={exportStocksCsv}
                 searchTerm={stocksSearchTerm}
                 onSearchTermChange={setStocksSearchTerm}
+                onAddAsset={canManage ? openAssetModal : null}
+                onExportCsv={exportStocksCsv}
+                onEditAsset={canManage ? openEditAssetModal : null}
+                onIssueAsset={canManage ? issueAsset : null}
+                onRemoveAsset={canManage ? removeAsset : null}
                 onViewInvoice={setInvoicePreview}
               />
             ) : null}
 
-            {activeSection === "employees" ? (
+            {visibleSection === "employees" ? (
               <EmployeesSection
                 employees={employees}
-                onAddEmployee={openEmployeeModal}
-                onEditEmployee={openEditEmployeeModal}
-                onRemoveEmployee={removeEmployee}
+                onAddEmployee={canManage ? openEmployeeModal : null}
+                onEditEmployee={canManage ? openEditEmployeeModal : null}
+                onRemoveEmployee={canManage ? removeEmployee : null}
               />
             ) : null}
 
-            {activeSection === "i-note" ? (
-              <INoteSection notes={notes} assets={assets} onAddAssetFromINote={openAssetModalFromINote} />
+            {visibleSection === "i-note" ? (
+              <INoteSection notes={notes} assets={assets} onAddAssetFromINote={canManage ? openAssetModalFromINote : null} />
             ) : null}
 
-            {activeSection === "issue-return" ? (
+            {visibleSection === "issue-return" ? (
               <IssueReturnSection
                 issues={issues}
                 issueAssetById={issueAssetById}
@@ -992,10 +975,14 @@ function InventoryDashboard() {
                 onIssueStatusFilterChange={setIssueStatusFilter}
                 issueSearchTerm={issueSearchTerm}
                 onIssueSearchTermChange={setIssueSearchTerm}
-                onAddIssue={openIssueModal}
-                onEditIssue={openEditIssueModal}
-                onReturnIssue={returnIssue}
+                onAddIssue={canManage ? openIssueModal : null}
+                onEditIssue={canManage ? openEditIssueModal : null}
+                onReturnIssue={canManage ? returnIssue : null}
               />
+            ) : null}
+
+            {visibleSection === "users" && isAdmin ? (
+              <UserManagementSection currentUser={currentUser} catalog={catalog} />
             ) : null}
           </div>
         </main>
@@ -1190,7 +1177,7 @@ function InventoryDashboard() {
                   onChange={(event) => handleAssetSerialTrackingChange(event.target.checked)}
                   className="mt-0.5 size-4 rounded border-slate-300 text-slate-900 focus:ring-slate-300"
                 />
-                <span>If serial no available mark this box</span>
+                <span>If Serial No. available mark this box</span>
               </label>
             </div>
             {assetForm.useSerialNumbers ? (

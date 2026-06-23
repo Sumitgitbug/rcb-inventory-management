@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react"
+import AuthGate from "@/components/AuthGate"
 import InventoryDashboard from "@/components/InventoryDashboard"
 import INoteDetailPage from "@/components/inote/INoteDetailPage"
 
@@ -16,25 +17,24 @@ function App() {
     return () => window.removeEventListener("popstate", syncLocation)
   }, [])
 
-  if (selectedINote) {
-    return (
-      <INoteDetailPage
-        noteNo={selectedINote}
-        onBack={() => {
-          const nextUrl = new URL(window.location.href)
-          nextUrl.searchParams.delete("inote")
-          nextUrl.searchParams.delete("i_note")
-          window.history.pushState({}, "", `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`)
-          setSelectedINote("")
-        }}
-      />
-    )
-  }
-
   return (
-    <InventoryDashboard />
+    <AuthGate>
+      {({ user, onLogout }) => selectedINote ? (
+        <INoteDetailPage
+          noteNo={selectedINote}
+          onBack={() => {
+            const nextUrl = new URL(window.location.href)
+            nextUrl.searchParams.delete("inote")
+            nextUrl.searchParams.delete("i_note")
+            window.history.pushState({}, "", `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`)
+            setSelectedINote("")
+          }}
+        />
+      ) : (
+        <InventoryDashboard currentUser={user} onLogout={onLogout} />
+      )}
+    </AuthGate>
   )
 }
 
 export default App
-
