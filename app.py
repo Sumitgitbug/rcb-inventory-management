@@ -19,7 +19,7 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from werkzeug.security import check_password_hash, generate_password_hash
 
 
-load_dotenv()
+load_dotenv(Path(__file__).with_name(".env"), override=True)
 
 STATE_FILE = Path.home() / ".inventory_management" / "inventory_state.json"
 AUTH_FILE = Path.home() / ".inventory_management" / "auth_users.json"
