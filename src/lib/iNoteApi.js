@@ -6,6 +6,16 @@ function getAuthHeader() {
   return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
+async function getApiError(response, fallback) {
+  try {
+    const payload = await response.json()
+    if (payload?.error) return String(payload.error)
+  } catch {
+    // Use the status-based fallback when the server does not return JSON.
+  }
+  return `${fallback} (${response.status})`
+}
+
 export async function fetchINoteRecords(page = 1, limit = 10, term = "", group = "") {
   const params = new URLSearchParams({
     page: String(page),
@@ -23,7 +33,7 @@ export async function fetchINoteRecords(page = 1, limit = 10, term = "", group =
   })  
 
   if (!response.ok) {
-    throw new Error(`Failed to load I-Note records (${response.status})`)
+    throw new Error(await getApiError(response, "Failed to load I-Note records"))
   }
 
   return response.json()
@@ -45,7 +55,7 @@ export async function fetchINoteDetail(iNote) {
   })
 
   if (!response.ok) {
-    throw new Error(`Failed to load I-Note detail (${response.status})`)
+    throw new Error(await getApiError(response, "Failed to load I-Note detail"))
   }
 
   return response.json()

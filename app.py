@@ -57,7 +57,7 @@ MYSQL_CONFIG = _mysql_config()
 
 I_NOTE_API_BASE_URL = "https://ercb.rcb.ac.in/new/api/i-note-records.php"
 I_NOTE_DETAIL_API_URL = "https://ercb.rcb.ac.in/new/api/i-note.php"
-I_NOTE_API_KEY = os.getenv("INOTE_API_KEY", "").strip()
+I_NOTE_API_KEY = _env_secret("INOTE_API_KEY").strip()
 AUTH_TOKEN_MAX_AGE_SECONDS = _env_int("AUTH_TOKEN_MAX_AGE_SECONDS", 12 * 60 * 60)
 
 
@@ -1339,7 +1339,7 @@ def _inote_group(note: dict) -> str:
 @require_auth
 def proxy_i_note_records():
     if not I_NOTE_API_KEY:
-        return jsonify({"error": "missing i-note api key"}), 500
+        return jsonify({"error": "INOTE_API_KEY is missing in the backend .env file"}), 503
 
     page_int = _positive_query_int("page", 1)
     limit_int = _positive_query_int("limit", 10)
@@ -1410,7 +1410,7 @@ def proxy_i_note_records():
 @require_auth
 def proxy_get_i_note():
     if not I_NOTE_API_KEY:
-        return jsonify({"error": "missing i-note api key"}), 500
+        return jsonify({"error": "INOTE_API_KEY is missing in the backend .env file"}), 503
 
     i_note = request.args.get("i_note", "").strip()
     if not i_note:
