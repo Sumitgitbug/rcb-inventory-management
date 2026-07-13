@@ -1,15 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { Loader2 } from "lucide-react"
+import { Loader2, Plus } from "lucide-react"
 import { SectionShell } from "@/components/dashboard-ui"
 import Modal from "@/components/Modal"
 import INoteRecordsTab from "@/components/inote/INoteRecordsTab"
-import {
-  buildINoteAssetPrefill,
-  getINoteAcceptedQuantity,
-  getINoteItemDescription,
-  parseINoteQuantity,
-} from "@/lib/iNoteAssetPrefill"
 import { extractINoteDetail, extractINotePage, fetchINoteDetail, fetchINoteRecords, normalizeINoteValue } from "@/lib/iNoteApi"
+import { buildINoteAssetPrefill } from "@/lib/iNoteAssetPrefill"
 
 function normalizeText(value) {
   return String(value ?? "").trim()
@@ -34,48 +29,6 @@ function getItemValue(item, keys) {
 function formatQuantityValue(value) {
   const text = normalizeText(value)
   return text || "-"
-}
-
-function normalizeStatusKey(value) {
-  return normalizeText(value).toLowerCase()
-}
-
-function getDetailItems(payload) {
-  const summary = extractINoteDetail(payload)
-  const record = summary.record
-  if (Array.isArray(record?.items)) return record.items
-  if (Array.isArray(payload?.items)) return payload.items
-  return []
-}
-
-function getINoteAssetStatus(noteNo, payload, assets) {
-  const noteKey = normalizeStatusKey(noteNo)
-  const requiredByItem = new Map()
-
-  getDetailItems(payload).forEach((item) => {
-    const itemKey = normalizeStatusKey(getINoteItemDescription(item))
-    const quantity = parseINoteQuantity(getINoteAcceptedQuantity(item))
-    if (!itemKey || quantity <= 0) return
-    requiredByItem.set(itemKey, (requiredByItem.get(itemKey) ?? 0) + quantity)
-  })
-
-  if (!requiredByItem.size) return "pending"
-
-  const completedByItem = new Map()
-  assets.forEach((asset) => {
-    if (normalizeStatusKey(asset.sourceINoteNo) !== noteKey) return
-    const itemKey = normalizeStatusKey(asset.sourceINoteItemDescription)
-    if (!itemKey) return
-    completedByItem.set(itemKey, (completedByItem.get(itemKey) ?? 0) + Math.max(1, Number(asset.quantity) || 1))
-  })
-
-  const completedCount = [...completedByItem.values()].reduce((total, quantity) => total + quantity, 0)
-  if (completedCount <= 0) return "pending"
-
-  const allComplete = [...requiredByItem.entries()].every(
-    ([itemKey, requiredQuantity]) => (completedByItem.get(itemKey) ?? 0) >= requiredQuantity,
-  )
-  return allComplete ? "completed" : "partial"
 }
 
 function cacheNoteMeta(noteNo, noteMeta) {
@@ -106,56 +59,50 @@ function DocumentLine({ index, leftLabel, leftValue, rightLabel, rightValue }) {
   )
 }
 
-function DocumentItemRow({ item, index, noteNo, noteMeta, record, onAddAssetFromINote }) {
-  const acceptedQuantity = getINoteAcceptedQuantity(item)
-  const acceptedQuantityText = formatQuantityValue(acceptedQuantity)
-  const canCreateAsset = typeof onAddAssetFromINote === "function" && parseINoteQuantity(acceptedQuantity) > 0
-  const addAssetFromItem = () => {
-    onAddAssetFromINote(
-      buildINoteAssetPrefill({
-        noteNo,
-        noteMeta,
-        record,
-        item,
-        acceptedQuantity,
-      }),
-    )
-  }
+function DocumentItemRow({ item, index, noteNo, noteMeta, record, onAddAsset }) {
+  const acceptedQuantity = getItemValue(item, ["accepted_qty", "qty_accepted", "quantity_accepted", "accepted_quantity"])
 
   return (
     <tr className="align-top">
-      <td className="border border-slate-400 px-3 py-2 text-center text-[15px]">{item?.sr_no ?? index + 1}</td>
-      <td className="border border-slate-400 px-3 py-2 text-[15px]">
+      <td className="pr-4 py-1.5 text-[15px]">{item?.sr_no ?? index + 1}</td>
+      <td className="pr-4 py-1.5 text-[15px]">
         {getItemValue(item, ["item_desc", "description", "item_description", "desc", "particulars"]) || "-"}
       </td>
-      <td className="border border-slate-400 px-3 py-2 text-center text-[15px]">
+      <td className="pr-4 py-1.5 text-[15px]">
         {formatQuantityValue(getItemValue(item, ["qty_tendered", "quantity_tendered", "tendered_qty", "tender_qty", "qty", "quantity"]))}
       </td>
-      <td className="border border-slate-400 px-3 py-2 text-center text-[15px]">
-        {acceptedQuantityText}
+      <td className="pr-4 py-1.5 text-[15px]">
+        {formatQuantityValue(getItemValue(item, ["accepted_qty", "qty_accepted", "quantity_accepted", "accepted_quantity"]))}
       </td>
-      <td className="border border-slate-400 px-3 py-2 text-center text-[15px]">
+      <td className="pr-4 py-1.5 text-[15px]">
         {formatQuantityValue(getItemValue(item, ["rejected_balance", "rejected_balance_qty", "balance", "balance_qty", "rejected_qty", "rejected"]))}
       </td>
-      <td className="border border-slate-400 px-3 py-2 text-center text-[15px]">
-        {canCreateAsset ? (
+      <td className="py-1.5 text-[15px]">{getItemValue(item, ["remarks", "remark"]) || "-"}</td>
+      {onAddAsset ? (
+        <td className="py-1.5 pl-4 text-right">
           <button
             type="button"
-            onClick={addAssetFromItem}
-            className="inline-flex items-center justify-center rounded-md bg-blue-700 px-2.5 py-1 text-xs font-semibold text-white transition hover:bg-blue-800"
-            title="Add asset from this I-Note item"
+            onClick={() =>
+              onAddAsset(buildINoteAssetPrefill({
+                noteNo,
+                noteMeta,
+                record,
+                item,
+                acceptedQuantity,
+              }))
+            }
+            className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg bg-orange-600 px-3 py-1.5 text-xs font-bold text-white shadow-sm hover:bg-orange-700"
           >
+            <Plus className="size-3.5" />
             Add Asset
           </button>
-        ) : (
-          "-"
-        )}
-      </td>
+        </td>
+      ) : null}
     </tr>
   )
 }
 
-function INoteInlineDetail({ noteNo, noteMeta = {}, payload, loading, error, loaded, onAddAssetFromINote }) {
+function INoteInlineDetail({ noteNo, noteMeta = {}, payload, loading, error, loaded, onAddAsset }) {
   const summary = useMemo(() => extractINoteDetail(payload), [payload])
   const record = summary.record
   const items = Array.isArray(record?.items) ? record.items : Array.isArray(payload?.items) ? payload.items : []
@@ -185,7 +132,7 @@ function INoteInlineDetail({ noteNo, noteMeta = {}, payload, loading, error, loa
         <>
           <div className="text-center">
             <div className="text-[18px] tracking-wide">REGIONAL CENTRE FOR BIOTECHNOLOGY</div>
-            <div className="text-[17px]">क्षेत्रीय जैव प्रौद्योगिकी केंद्र</div>
+            <div className="text-[17px]">क्षेत्रीय जैव प्रौद्योगिकी केन्द्र</div>
           </div>
           <div className="mt-6 space-y-1">
             <DocumentLine index={1} leftLabel="Inspection Note No." leftValue={getDetailValue(record, ["inote_no", "note_uid", "i_note", "id", "uid"]) || noteNo} rightLabel="Date" rightValue={noteDate} />
@@ -195,15 +142,16 @@ function INoteInlineDetail({ noteNo, noteMeta = {}, payload, loading, error, loa
             <DocumentLine index={5} leftLabel="Invoice / Challan No." leftValue={getDetailValue(record, ["invoice_no", "invoiceNo", "challan_no", "challanNo"])} rightLabel="Date" rightValue={invoiceDate} />
           </div>
           <div className="mt-10 overflow-x-auto">
-            <table className="min-w-full border-collapse border border-slate-400 text-left">
+            <table className="min-w-full border-collapse text-left">
               <thead>
                 <tr className="text-[15px] font-normal">
-                  <th className="w-[72px] border border-slate-400 px-3 py-2 text-center align-bottom">S. No.</th>
-                  <th className="border border-slate-400 px-3 py-2 align-bottom">Name of Articles</th>
-                  <th className="w-[150px] border border-slate-400 px-3 py-2 text-center align-bottom">Quantity Tendered</th>
-                  <th className="w-[150px] border border-slate-400 px-3 py-2 text-center align-bottom">Quantity Accepted</th>
-                  <th className="w-[190px] border border-slate-400 px-3 py-2 text-center align-bottom">Quantity Rejected / Balance</th>
-                  <th className="w-[120px] border border-slate-400 px-3 py-2 text-center align-bottom">Remarks</th>
+                  <th className="pr-4 pb-3">S. No.</th>
+                  <th className="pr-4 pb-3">Name of Articles</th>
+                  <th className="pr-4 pb-3">Quantity Tendered</th>
+                  <th className="pr-4 pb-3">Quantity Accepted</th>
+                  <th className="pr-4 pb-3">Quantity Rejected / Balance</th>
+                  <th className="pb-3">Remarks</th>
+                  {onAddAsset ? <th className="pb-3 pl-4 text-right">Action</th> : null}
                 </tr>
               </thead>
               <tbody>
@@ -216,12 +164,12 @@ function INoteInlineDetail({ noteNo, noteMeta = {}, payload, loading, error, loa
                       noteNo={noteNo}
                       noteMeta={noteMeta}
                       record={record}
-                      onAddAssetFromINote={onAddAssetFromINote}
+                      onAddAsset={onAddAsset}
                     />
                   ))
                 ) : (
                   <tr>
-                    <td className="border border-slate-400 px-3 py-6 text-sm text-slate-500" colSpan={6}>No item rows found in the response.</td>
+                    <td className="py-6 text-sm text-slate-500" colSpan={onAddAsset ? 7 : 6}>No item rows found in the response.</td>
                   </tr>
                 )}
               </tbody>
@@ -235,8 +183,7 @@ function INoteInlineDetail({ noteNo, noteMeta = {}, payload, loading, error, loa
   )
 }
 
-function INoteSection({ notes = [], assets = [], onAddAssetFromINote }) {
-  const [activeRecordGroup, setActiveRecordGroup] = useState("equipment")
+function INoteSection({ notes = [], onAddAssetFromINote }) {
   const [remoteNotes, setRemoteNotes] = useState([])
   const [loadingRemoteNotes, setLoadingRemoteNotes] = useState(false)
   const [remoteNotesError, setRemoteNotesError] = useState("")
@@ -245,8 +192,9 @@ function INoteSection({ notes = [], assets = [], onAddAssetFromINote }) {
   const [remotePageSize] = useState(10)
   const [remoteTotalPages, setRemoteTotalPages] = useState(1)
   const [remoteTotalRecords, setRemoteTotalRecords] = useState(0)
-  const [recordsSearchTerm, setRecordsSearchTerm] = useState("")
+  const [recordsSearchTerm, setRecordsSearchTerm] = useState("") //debonce
 const [searchInput, setSearchInput] = useState("")
+  const [recordsGroup, setRecordsGroup] = useState("all")
   const [selectedINote, setSelectedINote] = useState("")
   const [selectedNoteMeta, setSelectedNoteMeta] = useState({})
   const [detailPayload, setDetailPayload] = useState(null)
@@ -254,14 +202,15 @@ const [searchInput, setSearchInput] = useState("")
   const [detailError, setDetailError] = useState("")
   const [detailLoaded, setDetailLoaded] = useState(false)
   const [detailModalOpen, setDetailModalOpen] = useState(false)
-  const [iNoteStatusByNo, setINoteStatusByNo] = useState({})
   const detailCacheRef = useRef(new Map())
   const pageCacheRef = useRef(new Map())
 
+  //  FIX: also searchitem pass and api
   const loadRemoteNotes = useCallback(
-    async (page = 1, searchTerm = "", options = {}) => {
+    async (page = 1, searchTerm = "", group = "all", options = {}) => {
       const { force = false, isCancelled = () => false } = options
-      const cacheKey = `${activeRecordGroup}__${page}__${searchTerm.trim()}`
+      const normalizedGroup = group === "equipment" || group === "consumables" ? group : "all"
+      const cacheKey = `${page}__${searchTerm.trim()}__${normalizedGroup}`
 
       if (!force && pageCacheRef.current.has(cacheKey)) {
         const pageData = pageCacheRef.current.get(cacheKey)
@@ -279,7 +228,13 @@ const [searchInput, setSearchInput] = useState("")
       setRemoteNotesError("")
       setRemoteNotesLoaded(false)
       try {
-        const payload = await fetchINoteRecords(page, remotePageSize, searchTerm.trim(), activeRecordGroup)
+        //  term is passing on apicall
+        const payload = await fetchINoteRecords(
+          page,
+          remotePageSize,
+          searchTerm.trim(),
+          normalizedGroup === "all" ? "" : normalizedGroup,
+        )
         if (isCancelled()) return
         const pageData = extractINotePage(payload)
         pageCacheRef.current.set(cacheKey, pageData)
@@ -296,7 +251,7 @@ const [searchInput, setSearchInput] = useState("")
         if (!isCancelled()) setLoadingRemoteNotes(false)
       }
     },
-    [activeRecordGroup, remotePageSize],
+    [remotePageSize],
   )
 
   const loadDetailForNote = useCallback(async (noteValue, options = {}) => {
@@ -334,7 +289,7 @@ const [searchInput, setSearchInput] = useState("")
     }
   }, [])
 
-  // Debounce search input before calling the records API.
+  //   API call on page or searchitem     debounce 
   useEffect(() => {
   const timer = setTimeout(() => {
     const term = searchInput.trim()
@@ -350,25 +305,19 @@ const [searchInput, setSearchInput] = useState("")
 }, [searchInput])
   useEffect(() => {
     let cancelled = false
-    void loadRemoteNotes(remotePage, recordsSearchTerm, { isCancelled: () => cancelled })
+    void loadRemoteNotes(remotePage, recordsSearchTerm, recordsGroup, { isCancelled: () => cancelled })
     return () => { cancelled = true }
-  }, [loadRemoteNotes, remotePage, recordsSearchTerm])
+  }, [loadRemoteNotes, remotePage, recordsSearchTerm, recordsGroup])
 
-  // Reset to the first page when the search term changes.
+  //  gp back on 1 page when search term changes, and call API with new term
   const handleSearchTermChange = useCallback((term) => {
   setSearchInput(term)
 }, [])
 
-  const handleRecordGroupChange = useCallback((group) => {
-    if (group === activeRecordGroup) return
-    setActiveRecordGroup(group)
+  const handleGroupChange = useCallback((group) => {
+    setRecordsGroup(group)
     setRemotePage(1)
-    setRemoteNotes([])
-    setRemoteTotalPages(1)
-    setRemoteTotalRecords(0)
-    setRemoteNotesLoaded(false)
-    setINoteStatusByNo({})
-  }, [activeRecordGroup])
+  }, [])
 
   const tableNotes = remoteNotesLoaded ? remoteNotes : notes
 
@@ -376,43 +325,6 @@ const [searchInput, setSearchInput] = useState("")
     () => [...tableNotes].sort((a, b) => new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0)),
     [tableNotes],
   )
-  useEffect(() => {
-    let cancelled = false
-
-    async function loadVisibleStatuses() {
-      const visibleNoteNos = sortedNotes
-        .map((note) => normalizeINoteValue(note))
-        .map(normalizeText)
-        .filter(Boolean)
-
-      if (!visibleNoteNos.length) {
-        setINoteStatusByNo({})
-        return
-      }
-
-      const nextStatuses = {}
-      await Promise.all(
-        visibleNoteNos.map(async (noteNo) => {
-          try {
-            let payload = detailCacheRef.current.get(noteNo)
-            if (!payload) {
-              payload = await fetchINoteDetail(noteNo)
-              detailCacheRef.current.set(noteNo, payload)
-            }
-            if (cancelled) return
-            nextStatuses[noteNo] = getINoteAssetStatus(noteNo, payload, assets)
-          } catch {
-            if (!cancelled) nextStatuses[noteNo] = "pending"
-          }
-        }),
-      )
-
-      if (!cancelled) setINoteStatusByNo(nextStatuses)
-    }
-
-    void loadVisibleStatuses()
-    return () => { cancelled = true }
-  }, [sortedNotes, assets])
 
   const goToPage = (nextPage) => {
     const bounded = Math.max(1, Math.min(nextPage, remoteTotalPages || 1))
@@ -427,19 +339,15 @@ const [searchInput, setSearchInput] = useState("")
     void loadDetailForNote(nextINote, { noteMeta: note })
   }
 
-  const handleAddAssetFromINote = useCallback(
-    (prefill) => {
-      setDetailModalOpen(false)
-      onAddAssetFromINote?.(prefill)
-    },
-    [onAddAssetFromINote],
-  )
+  const handleAddAssetFromINote = (prefill) => {
+    onAddAssetFromINote?.(prefill)
+    setDetailModalOpen(false)
+  }
 
   return (
     <SectionShell
       title="I-Note"
       description="Review generated I-Note records and open a printable detail page."
-      contentClassName="px-6 py-3"
       action={
         <div className="flex items-center gap-2">
           <div className="rounded-full bg-slate-100 px-3 py-2 text-xs font-medium text-slate-600">
@@ -448,38 +356,15 @@ const [searchInput, setSearchInput] = useState("")
         </div>
       }
     >
-      <div className="mb-2 flex flex-none flex-wrap gap-2">
-        {[
-          { value: "equipment", label: "Equipment" },
-          { value: "consumables", label: "Consumables" },
-        ].map((tab) => {
-          const active = activeRecordGroup === tab.value
-          return (
-            <button
-              key={tab.value}
-              type="button"
-              onClick={() => handleRecordGroupChange(tab.value)}
-              className={[
-                "rounded-xl border px-4 py-2 text-sm font-semibold transition",
-                active
-                  ? "border-orange-600 bg-orange-600 text-white"
-                  : "border-orange-200 bg-white text-orange-700 hover:border-orange-300 hover:bg-orange-50",
-              ].join(" ")}
-            >
-              {tab.label}
-            </button>
-          )
-        })}
-      </div>
-
-      <div className="min-h-0 flex-1">
       <INoteRecordsTab
         notes={sortedNotes}
         loading={loadingRemoteNotes}
         error={remoteNotesError}
-        onRefresh={() => loadRemoteNotes(remotePage, recordsSearchTerm, { force: true })}
+        onRefresh={() => loadRemoteNotes(remotePage, recordsSearchTerm, recordsGroup, { force: true })}
        searchTerm={searchInput}
         onSearchTermChange={handleSearchTermChange}
+        group={recordsGroup}
+        onGroupChange={handleGroupChange}
         page={remotePage}
         totalPages={remoteTotalPages}
         totalRecords={remoteTotalRecords}
@@ -492,9 +377,7 @@ const [searchInput, setSearchInput] = useState("")
         onSelectNote={handleSelectNote}
         selectedINote={selectedINote}
         detailLoading={detailLoading}
-        iNoteStatusByNo={iNoteStatusByNo}
       />
-      </div>
 
       <Modal
         open={detailModalOpen}
@@ -508,10 +391,10 @@ const [searchInput, setSearchInput] = useState("")
           noteMeta={selectedNoteMeta}
           payload={detailPayload}
           loading={detailLoading}
-        error={detailError}
-        loaded={detailLoaded}
-        onAddAssetFromINote={handleAddAssetFromINote}
-      />
+          error={detailError}
+          loaded={detailLoaded}
+          onAddAsset={onAddAssetFromINote ? handleAddAssetFromINote : null}
+        />
       </Modal>
     </SectionShell>
   )

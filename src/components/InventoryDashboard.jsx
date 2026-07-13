@@ -1,8 +1,7 @@
 ﻿import { useEffect, useMemo, useState } from "react"
-import { ArrowLeftRight, CircleCheckBig, Eye, Package, Plus, Search, Upload } from "lucide-react"
+import { Activity, ArrowLeftRight, Boxes, Eye, Package, Plus, Search, Upload } from "lucide-react"
 import Sidebar from "@/components/Sidebar"
 import Modal from "@/components/Modal"
-import campusImage from "@/assets/rcb-campus.jpg"
 import { loadInventoryFromApi, saveInventoryToApi } from "@/lib/backend"
 import {
   addCatalogCategory,
@@ -16,7 +15,7 @@ import {
   normalizeCatalog,
 } from "@/data/inventoryCatalog"
 import { generateAssetId, loadInventoryState, saveInventoryState } from "@/lib/inventory"
-import { ActionButton, StatCard, SectionShell } from "@/components/dashboard-ui"
+import { ActionButton, SectionShell } from "@/components/dashboard-ui"
 import AssetsSection from "@/components/AssetsSection"
 import INoteSection from "@/components/INoteSection"
 import EmployeesSection from "@/components/EmployeesSection"
@@ -25,6 +24,12 @@ import UserManagementSection from "@/components/UserManagementSection"
 
 const ACTIVE_SECTION_STORAGE_KEY = "inventory.activeSection"
 const SECTION_IDS = new Set(["dashboard", "assets", "employees", "i-note", "issue-return", "users"])
+const ASSET_DASHBOARD_GROUPS = [
+  { key: "IT", label: "IT", color: "#2563eb", light: "#dbeafe", types: ["IT"] },
+  { key: "Engineering", label: "Engineering", color: "#059669", light: "#d1fae5", types: ["Engineering"] },
+  { key: "Store", label: "Store", color: "#f59e0b", light: "#fef3c7", types: ["Store"] },
+  { key: "Others", label: "Others", color: "#e11d48", light: "#ffe4e6", types: [] },
+]
 
 function readInitialSection() {
   if (typeof window === "undefined") return "dashboard"
@@ -104,6 +109,24 @@ function emptyIssueForm(assetId = "") {
   }
 }
 
+function emptyTransferForm(issue = null) {
+  return {
+    issueId: issue?.id || "",
+    assetId: issue?.assetId || "",
+    fromEmployeeId: issue?.employeeId || "",
+    fromEmployeeCode: issue?.employeeCode || "",
+    fromEmployeeName: issue?.employeeName || "",
+    fromEmployeeEmail: issue?.employeeEmail || "",
+    toEmployeeId: "",
+    toEmployeeCode: "",
+    toEmployeeName: "",
+    toEmployeeEmail: "",
+    fromLocation: issue?.location || "",
+    toLocation: "",
+    transferDate: todayISO(),
+  }
+}
+
 function normalizeIssueStatus(status) {
   return String(status || "").trim().toLowerCase()
 }
@@ -135,6 +158,16 @@ function buildIssueCounts(issues) {
     counts.set(key, (counts.get(key) ?? 0) + 1)
   })
   return counts
+}
+
+function getAssetUnits(asset) {
+  return Math.max(0, Number(asset?.quantity ?? 1) || 0)
+}
+
+function formatPercent(value) {
+  if (!Number.isFinite(value)) return "0%"
+  const rounded = Math.round(value)
+  return `${rounded}%`
 }
 
 function hasMeaningfulInventoryState(state) {
@@ -215,6 +248,7 @@ function InventoryDashboard({ currentUser, onLogout }) {
   const [assetModalOpen, setAssetModalOpen] = useState(false)
   const [employeeModalOpen, setEmployeeModalOpen] = useState(false)
   const [issueModalOpen, setIssueModalOpen] = useState(false)
+  const [transferModalOpen, setTransferModalOpen] = useState(false)
   const [invoicePreview, setInvoicePreview] = useState(null)
   const [catalogModal, setCatalogModal] = useState(null)
   const [editingAssetId, setEditingAssetId] = useState(null)
@@ -225,6 +259,7 @@ function InventoryDashboard({ currentUser, onLogout }) {
   const [assetForm, setAssetForm] = useState(emptyAssetForm(initial.catalog ?? createDefaultCatalog()))
   const [employeeForm, setEmployeeForm] = useState(emptyEmployeeForm())
   const [issueForm, setIssueForm] = useState(emptyIssueForm())
+  const [transferForm, setTransferForm] = useState(emptyTransferForm())
   const [assetSearchTerm, setAssetSearchTerm] = useState("")
   const [employeeSearchTerm, setEmployeeSearchTerm] = useState("")
   const [showAssetDropdown, setShowAssetDropdown] = useState(false)
@@ -490,6 +525,15 @@ function InventoryDashboard({ currentUser, onLogout }) {
     setIssueModalOpen(true)
   }
 
+  function openTransferIssueModal(issue) {
+    if (normalizeIssueStatus(issue.status) === "returned") {
+      showError("Returned item cannot be transferred.")
+      return
+    }
+    setTransferForm(emptyTransferForm(issue))
+    setTransferModalOpen(true)
+  }
+
   function openCatalogModal(target) {
     setCatalogModal({ target, value: "" })
   }
@@ -550,6 +594,17 @@ function InventoryDashboard({ currentUser, onLogout }) {
       employeeCode: nextEmployeeCode,
       employeeName: nextEmployee?.name || "",
       employeeEmail: nextEmployee?.email || "",
+    }))
+  }
+
+  function handleTransferEmployeeChange(nextEmployeeId) {
+    const nextEmployee = employees.find((employee) => employee.id === nextEmployeeId)
+    setTransferForm((current) => ({
+      ...current,
+      toEmployeeId: nextEmployee?.id || "",
+      toEmployeeCode: nextEmployee?.code || "",
+      toEmployeeName: nextEmployee?.name || "",
+      toEmployeeEmail: nextEmployee?.email || "",
     }))
   }
 
@@ -774,6 +829,9 @@ function InventoryDashboard({ currentUser, onLogout }) {
     event.preventDefault()
     const now = new Date().toISOString()
     const normalizedStatus = normalizeIssueStatus(issueForm.status) || "issued"
+    const existingIssue = editingIssueId
+      ? issues.find((issue) => issue.id === editingIssueId)
+      : null
     const nextIssue = {
       id: editingIssueId || `issue-${now}`,
       assetId: issueForm.assetId.trim(),
@@ -786,7 +844,8 @@ function InventoryDashboard({ currentUser, onLogout }) {
       issueDate: issueForm.issueDate,
       status: normalizedStatus,
       returnDate: issueForm.returnDate || "",
-      createdAt: now,
+      transferHistory: Array.isArray(existingIssue?.transferHistory) ? existingIssue.transferHistory : [],
+      createdAt: existingIssue?.createdAt || now,
       updatedAt: now,
     }
     if (!nextIssue.assetId || !nextIssue.employeeId || !nextIssue.employeeName || !nextIssue.location) {
@@ -809,6 +868,59 @@ function InventoryDashboard({ currentUser, onLogout }) {
           ? "Return saved successfully."
           : "Item issued successfully.",
     )
+  }
+
+  function submitTransferForm(event) {
+    event.preventDefault()
+    const issueId = transferForm.issueId
+    const fromLocation = transferForm.fromLocation.trim()
+    const toLocation = transferForm.toLocation.trim()
+    const toEmployeeId = transferForm.toEmployeeId.trim()
+    const transferDate = transferForm.transferDate || todayISO()
+
+    if (!issueId || !toLocation || !toEmployeeId) {
+      showError("Please select target employee and transfer location.")
+      return
+    }
+
+    const now = new Date().toISOString()
+    setInventory((current) => ({
+      ...current,
+      issues: (current.issues ?? []).map((issue) => {
+        if (issue.id !== issueId) return issue
+        const history = Array.isArray(issue.transferHistory) ? issue.transferHistory : []
+        return {
+          ...issue,
+          employeeId: transferForm.toEmployeeId,
+          employeeCode: transferForm.toEmployeeCode,
+          employeeName: transferForm.toEmployeeName,
+          employeeEmail: transferForm.toEmployeeEmail,
+          location: toLocation,
+          transferHistory: [
+            ...history,
+            {
+              id: `transfer-${now}`,
+              fromEmployeeId: transferForm.fromEmployeeId || issue.employeeId || "",
+              fromEmployeeCode: transferForm.fromEmployeeCode || issue.employeeCode || "",
+              fromEmployeeName: transferForm.fromEmployeeName || issue.employeeName || "",
+              fromEmployeeEmail: transferForm.fromEmployeeEmail || issue.employeeEmail || "",
+              toEmployeeId: transferForm.toEmployeeId,
+              toEmployeeCode: transferForm.toEmployeeCode,
+              toEmployeeName: transferForm.toEmployeeName,
+              toEmployeeEmail: transferForm.toEmployeeEmail,
+              fromLocation: fromLocation || issue.location || "",
+              toLocation,
+              transferDate,
+              createdAt: now,
+            },
+          ],
+          updatedAt: now,
+        }
+      }),
+    }))
+    setTransferModalOpen(false)
+    setTransferForm(emptyTransferForm())
+    showSuccess("Item transferred successfully.")
   }
 
   function removeAsset(assetId) {
@@ -867,11 +979,58 @@ function InventoryDashboard({ currentUser, onLogout }) {
     setIssueModalOpen(true)
   }
 
-  const issuedCount = issues.filter((issue) => normalizeIssueStatus(issue.status) !== "returned").length
-  const stats = [
-    { label: "Total No of Assets", value: assets.length, icon: Package },
-    { label: "Issued", value: issuedCount, icon: ArrowLeftRight },
-  ]
+  const activeIssues = useMemo(
+    () => issues.filter((issue) => normalizeIssueStatus(issue.status) !== "returned"),
+    [issues],
+  )
+  const returnedIssues = useMemo(
+    () => issues.filter((issue) => normalizeIssueStatus(issue.status) === "returned"),
+    [issues],
+  )
+  const dashboardTotalUnits = useMemo(
+    () => assetsWithAvailability.reduce((total, asset) => total + getAssetUnits(asset), 0),
+    [assetsWithAvailability],
+  )
+  const dashboardAvailableUnits = useMemo(
+    () => assetsWithAvailability.reduce((total, asset) => total + (Number(asset.availableQuantity ?? 0) || 0), 0),
+    [assetsWithAvailability],
+  )
+  const dashboardIssuedUnits = Math.max(0, dashboardTotalUnits - dashboardAvailableUnits)
+  const dashboardGroups = useMemo(() => {
+    const primaryTypes = new Set(
+      ASSET_DASHBOARD_GROUPS.flatMap((group) => group.types),
+    )
+
+    return ASSET_DASHBOARD_GROUPS.map((group) => {
+      const units = assetsWithAvailability.reduce((total, asset) => {
+        const type = String(asset.type || "").trim()
+        const matches = group.key === "Others" ? !primaryTypes.has(type) : group.types.includes(type)
+        return matches ? total + getAssetUnits(asset) : total
+      }, 0)
+      const records = assetsWithAvailability.filter((asset) => {
+        const type = String(asset.type || "").trim()
+        return group.key === "Others" ? !primaryTypes.has(type) : group.types.includes(type)
+      }).length
+      const percentage = dashboardTotalUnits > 0 ? (units / dashboardTotalUnits) * 100 : 0
+
+      return { ...group, units, records, percentage }
+    })
+  }, [assetsWithAvailability, dashboardTotalUnits])
+
+  const assetWheelGradient = useMemo(() => {
+    if (!dashboardTotalUnits) return "conic-gradient(#e5e7eb 0deg 360deg)"
+    let start = 0
+    const stops = dashboardGroups
+      .filter((group) => group.units > 0)
+      .map((group) => {
+        const sweep = (group.units / dashboardTotalUnits) * 360
+        const end = start + sweep
+        const stop = `${group.color} ${start}deg ${end}deg`
+        start = end
+        return stop
+      })
+    return `conic-gradient(${stops.join(", ")})`
+  }, [dashboardGroups, dashboardTotalUnits])
 
   return (
     <div className="h-screen overflow-hidden bg-[#eef2f6] text-slate-900">
@@ -897,45 +1056,122 @@ function InventoryDashboard({ currentUser, onLogout }) {
           ) : null}
 
           <div className="flex h-full w-full min-w-0 flex-col">
-           {visibleSection === "dashboard" ? (
-  <div className="relative flex-1 min-w-0 overflow-hidden">
-    <img
-      src={campusImage}
-      alt="RCB Campus"
-      className="absolute inset-0 h-full w-full object-cover object-center"
-    />
-    <div className="absolute inset-0 bg-gradient-to-b from-black/40 via-black/20 to-black/50" />
-    <div className="relative z-10 flex h-full flex-col justify-between p-6 md:p-10">
-      <div className="grid gap-4 md:grid-cols-2 xl:max-w-3xl">
-        {stats.map((stat) => (
-          <StatCard key={stat.label} {...stat} />
-        ))}
-      </div>
-      <div className="max-w-2xl">
-        <h2 className="text-3xl font-bold tracking-tight text-white md:text-5xl">
-          Regional Centre for Biotechnology
-        </h2>
-        <p className="mt-4 max-w-xl text-base leading-7 text-white/80 md:text-lg">
-          A centralized platform designed to efficiently manage organizational assets and resources across all departments.
-        </p>
-        <div className="mt-6 space-y-3">
-          <div className="flex items-center gap-3 text-white">
-            <CircleCheckBig className="size-5 flex-shrink-0 text-emerald-400" />
-            <span className="text-base font-medium">Real-time Stock Monitoring</span>
-          </div>
-          <div className="flex items-center gap-3 text-white">
-            <CircleCheckBig className="size-5 flex-shrink-0 text-emerald-400" />
-            <span className="text-base font-medium">Category-wise Asset Tracking</span>
-          </div>
-          <div className="flex items-center gap-3 text-white">
-            <CircleCheckBig className="size-5 flex-shrink-0 text-emerald-400" />
-            <span className="text-base font-medium">Easy Data Access & Reports</span>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-) : null}
+            {visibleSection === "dashboard" ? (
+              <div className="flex min-h-0 flex-1 flex-col overflow-auto bg-slate-100 p-5 md:p-7">
+                <div className="mb-5 flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Inventory Overview</p>
+                    <h2 className="mt-1 text-2xl font-semibold tracking-tight text-slate-950 md:text-3xl">
+                      Asset Distribution Dashboard
+                    </h2>
+                  </div>
+                  <div className="flex flex-wrap gap-2 text-xs font-medium text-slate-600">
+                    <span className="rounded-full border border-slate-200 bg-white px-3 py-1.5">Live stock view</span>
+                    <span className="rounded-full border border-slate-200 bg-white px-3 py-1.5">Category wise divided</span>
+                  </div>
+                </div>
+
+                <div className="grid min-h-0 flex-1 gap-5 xl:grid-cols-[1.2fr_0.8fr]">
+                  <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                    <div className="flex flex-col gap-6 lg:flex-row lg:items-center">
+                      <div className="flex flex-1 items-center justify-center">
+                        <div
+                          className="relative flex aspect-square w-full max-w-[330px] items-center justify-center rounded-full"
+                          style={{ background: assetWheelGradient }}
+                          aria-label="Asset category percentage wheel"
+                        >
+                          <div className="flex size-[62%] flex-col items-center justify-center rounded-full border border-slate-100 bg-white text-center shadow-inner">
+                            <Package className="mb-2 size-7 text-slate-700" />
+                            <div className="text-4xl font-semibold tracking-tight text-slate-950">{dashboardTotalUnits}</div>
+                            <div className="mt-1 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Total Assets</div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="min-w-0 flex-1 space-y-3">
+                        <div>
+                          <h3 className="text-base font-semibold text-slate-950">Department Share</h3>
+                          <p className="mt-1 text-sm text-slate-500">Assets grouped into IT, Engineering, Store, and Others.</p>
+                        </div>
+                        <div className="space-y-3">
+                          {dashboardGroups.map((group) => (
+                            <div key={group.key} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                              <div className="mb-2 flex items-center justify-between gap-3">
+                                <div className="flex min-w-0 items-center gap-2">
+                                  <span className="size-3 rounded-full" style={{ backgroundColor: group.color }} />
+                                  <span className="truncate text-sm font-semibold text-slate-900">{group.label}</span>
+                                </div>
+                                <div className="text-sm font-semibold text-slate-950">{formatPercent(group.percentage)}</div>
+                              </div>
+                              <div className="h-2 rounded-full bg-white">
+                                <div
+                                  className="h-full rounded-full"
+                                  style={{ width: `${Math.max(0, Math.min(100, group.percentage))}%`, backgroundColor: group.color }}
+                                />
+                              </div>
+                              <div className="mt-2 flex justify-between text-xs text-slate-500">
+                                <span>{group.units} asset{group.units === 1 ? "" : "s"}</span>
+                                <span>{group.records} record{group.records === 1 ? "" : "s"}</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </section>
+
+                  <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-1">
+                    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Availability</p>
+                          <h3 className="mt-1 text-2xl font-semibold text-slate-950">{dashboardAvailableUnits}</h3>
+                        </div>
+                        <div className="flex size-12 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-700">
+                          <Boxes className="size-6" />
+                        </div>
+                      </div>
+                      <p className="mt-3 text-sm text-slate-500">Available units currently ready for issue or stock movement.</p>
+                    </div>
+
+                    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Issued Stock</p>
+                          <h3 className="mt-1 text-2xl font-semibold text-slate-950">{dashboardIssuedUnits}</h3>
+                        </div>
+                        <div className="flex size-12 items-center justify-center rounded-2xl bg-orange-50 text-orange-700">
+                          <ArrowLeftRight className="size-6" />
+                        </div>
+                      </div>
+                      <p className="mt-3 text-sm text-slate-500">{activeIssues.length} active issue record{activeIssues.length === 1 ? "" : "s"} in progress.</p>
+                    </div>
+
+                    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:col-span-2 xl:col-span-1">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Workflow Records</p>
+                          <h3 className="mt-1 text-2xl font-semibold text-slate-950">{issues.length}</h3>
+                        </div>
+                        <div className="flex size-12 items-center justify-center rounded-2xl bg-blue-50 text-blue-700">
+                          <Activity className="size-6" />
+                        </div>
+                      </div>
+                      <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
+                        <div className="rounded-xl bg-slate-50 p-3">
+                          <div className="font-semibold text-slate-950">{activeIssues.length}</div>
+                          <div className="text-xs text-slate-500">Active issues</div>
+                        </div>
+                        <div className="rounded-xl bg-slate-50 p-3">
+                          <div className="font-semibold text-slate-950">{returnedIssues.length}</div>
+                          <div className="text-xs text-slate-500">Returned</div>
+                        </div>
+                      </div>
+                    </div>
+                  </section>
+                </div>
+              </div>
+            ) : null}
             {visibleSection === "assets" ? (
               <AssetsSection
                 catalog={catalog}
@@ -978,11 +1214,12 @@ function InventoryDashboard({ currentUser, onLogout }) {
                 onAddIssue={canManage ? openIssueModal : null}
                 onEditIssue={canManage ? openEditIssueModal : null}
                 onReturnIssue={canManage ? returnIssue : null}
+                onTransferIssue={canManage ? openTransferIssueModal : null}
               />
             ) : null}
 
             {visibleSection === "users" && isAdmin ? (
-              <UserManagementSection currentUser={currentUser} catalog={catalog} />
+              <UserManagementSection currentUser={currentUser} catalog={catalog} onOpenCatalogModal={openCatalogModal} />
             ) : null}
           </div>
         </main>
@@ -1035,7 +1272,7 @@ function InventoryDashboard({ currentUser, onLogout }) {
                 ))}
               </select>
             </div>
-
+               
             <div className="grid gap-2">
               <div className="flex items-center justify-between gap-3">
                 <span className="text-sm font-medium text-slate-700">Category</span>
@@ -1163,7 +1400,7 @@ function InventoryDashboard({ currentUser, onLogout }) {
               />
             </label>
           </div>
-
+         
           <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
             <div className="mb-4 flex items-start justify-between gap-4">
               <div>
@@ -1414,6 +1651,104 @@ function InventoryDashboard({ currentUser, onLogout }) {
               Cancel
             </ActionButton>
             <ActionButton type="submit">{editingIssueId ? "Update Issue Item" : "Issue Item"}</ActionButton>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Transfer Modal */}
+      <Modal
+        open={transferModalOpen}
+        onClose={() => {
+          setTransferModalOpen(false)
+          setTransferForm(emptyTransferForm())
+        }}
+        title="Transfer Item"
+        description="Move an issued asset from one location to another and record the transfer date."
+        widthClass="max-w-2xl"
+      >
+        <form className="space-y-5" onSubmit={submitTransferForm}>
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+            <div className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Asset ID</div>
+            <div className="mt-1 text-base font-semibold text-slate-950">{transferForm.assetId || "-"}</div>
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <div className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">From Employee</div>
+              <div className="mt-2 text-sm font-semibold text-slate-950">
+                {transferForm.fromEmployeeCode || "-"} {transferForm.fromEmployeeName ? `- ${transferForm.fromEmployeeName}` : ""}
+              </div>
+              <div className="mt-1 text-xs text-slate-500">{transferForm.fromEmployeeEmail || "-"}</div>
+            </div>
+
+            <label className="grid gap-2">
+              <span className="text-sm font-medium text-slate-700">To Employee</span>
+              <select
+                value={transferForm.toEmployeeId}
+                onChange={(event) => handleTransferEmployeeChange(event.target.value)}
+                className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
+                required
+              >
+                <option value="">Select employee</option>
+                {employees
+                  .filter((employee) => employee.id !== transferForm.fromEmployeeId)
+                  .map((employee) => (
+                    <option key={employee.id} value={employee.id}>
+                      {employee.code} - {employee.name}
+                    </option>
+                  ))}
+              </select>
+              {transferForm.toEmployeeId ? (
+                <span className="text-xs text-slate-500">
+                  {transferForm.toEmployeeEmail || "-"}
+                </span>
+              ) : null}
+            </label>
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-2">
+            <label className="grid gap-2">
+              <span className="text-sm font-medium text-slate-700">From Location</span>
+              <input
+                value={transferForm.fromLocation}
+                readOnly
+                className="h-11 rounded-xl border border-slate-200 bg-slate-100 px-3 text-sm text-slate-600 outline-none"
+              />
+            </label>
+            <label className="grid gap-2">
+              <span className="text-sm font-medium text-slate-700">To Location</span>
+              <input
+                value={transferForm.toLocation}
+                onChange={(event) => setTransferForm((current) => ({ ...current, toLocation: event.target.value }))}
+                className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
+                placeholder="Enter new location"
+                required
+              />
+            </label>
+            <label className="grid gap-2 md:col-span-2">
+              <span className="text-sm font-medium text-slate-700">Transfer Date</span>
+              <input
+                type="date"
+                value={transferForm.transferDate}
+                onChange={(event) => setTransferForm((current) => ({ ...current, transferDate: event.target.value }))}
+                className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
+                required
+              />
+            </label>
+          </div>
+
+          <div className="flex justify-end gap-3">
+            <ActionButton
+              type="button"
+              className="bg-slate-200 text-slate-900 hover:bg-slate-300"
+              onClick={() => {
+                setTransferModalOpen(false)
+                setTransferForm(emptyTransferForm())
+              }}
+            >
+              Cancel
+            </ActionButton>
+            <ActionButton type="submit">Transfer Item</ActionButton>
           </div>
         </form>
       </Modal>

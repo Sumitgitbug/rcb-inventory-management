@@ -57,6 +57,8 @@ function INoteRecordsTab({
   onRefresh,
   searchTerm = "",
   onSearchTermChange,
+  group = "all",
+  onGroupChange,
   page = 1,
   pageSize = 10,
   totalPages = 1,
@@ -73,20 +75,47 @@ function INoteRecordsTab({
 }) {
   const sortedNotes = [...notes].sort((a, b) => String(getSortKey(b)).localeCompare(String(getSortKey(a))))
   const paginationItems = getPaginationItems(page, totalPages)
+  const groupOptions = [
+    { value: "all", label: "All" },
+    { value: "equipment", label: "Equipment" },
+    { value: "consumables", label: "Consumables" },
+  ]
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
       <div className="flex-none border-b border-slate-200 px-4 py-3">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-          <label className="grid gap-2 lg:max-w-md lg:flex-1">
-            <span className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Search Records</span>
-            <input
-              value={searchTerm}
-              onChange={(event) => onSearchTermChange?.(event.target.value)}
-              placeholder="Search I-Note, indent no, order no, invoice no, agency..."
-              className="h-10 rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
-            />
-          </label>
+          <div className="grid gap-3 lg:max-w-2xl lg:flex-1">
+            <label className="grid gap-2">
+              <span className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Search Records</span>
+              <input
+                value={searchTerm}
+                onChange={(event) => onSearchTermChange?.(event.target.value)}
+                placeholder="Search I-Note, indent no, order no, invoice no, agency..."
+                className="h-10 rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
+              />
+            </label>
+            <div className="flex flex-wrap gap-2" aria-label="I-Note groups">
+              {groupOptions.map((option) => {
+                const active = group === option.value
+                return (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => onGroupChange?.(option.value)}
+                    className={[
+                      "rounded-full border px-3 py-1.5 text-xs font-bold transition",
+                      active
+                        ? "border-orange-600 bg-orange-600 text-white shadow-sm"
+                        : "border-orange-200 bg-orange-50 text-orange-700 hover:border-orange-300 hover:bg-orange-100",
+                    ].join(" ")}
+                  >
+                    {option.label}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
 
           <div className="flex flex-wrap items-center gap-3">
             <div className="text-sm text-slate-600">
@@ -109,8 +138,10 @@ function INoteRecordsTab({
             ) : null}
           </div>
         </div>
-        {searchTerm.trim() ? (
-          <div className="mt-3 text-xs text-slate-500">Search is filtering the currently loaded page.</div>
+        {searchTerm.trim() || group !== "all" ? (
+          <div className="mt-3 text-xs text-slate-500">
+            {group !== "all" ? `Showing ${group} records` : "Search is filtering records from the API."}
+          </div>
         ) : null}
       </div>
 

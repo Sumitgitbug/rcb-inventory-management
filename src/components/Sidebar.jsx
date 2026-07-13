@@ -22,6 +22,7 @@ const items = [
 
 function Sidebar({ activeSection, onSectionChange, currentUser, onLogout }) {
   const [collapsed, setCollapsed] = useState(false)
+  const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false)
   const displayName = currentUser?.fullName || currentUser?.username || "Admin"
   const roleName = currentUser?.role || "admin"
   const visibleItems = items.filter((item) => !item.adminOnly || currentUser?.role === "admin")
@@ -31,6 +32,11 @@ function Sidebar({ activeSection, onSectionChange, currentUser, onLogout }) {
     .slice(0, 2)
     .map((part) => part[0]?.toUpperCase())
     .join("") || "A"
+
+  function confirmLogout() {
+    setLogoutConfirmOpen(false)
+    onLogout()
+  }
 
   return (
     <aside
@@ -102,7 +108,7 @@ function Sidebar({ activeSection, onSectionChange, currentUser, onLogout }) {
         {collapsed ? (
           <button
             type="button"
-            onClick={onLogout}
+            onClick={() => setLogoutConfirmOpen(true)}
             title={`${displayName} - Logout`}
             className="flex size-11 w-full items-center justify-center rounded-2xl bg-white/15 text-sm font-semibold text-white hover:bg-white/20"
           >
@@ -121,7 +127,7 @@ function Sidebar({ activeSection, onSectionChange, currentUser, onLogout }) {
             </div>
             <button
               type="button"
-              onClick={onLogout}
+              onClick={() => setLogoutConfirmOpen(true)}
               className="mt-3 h-9 w-full rounded-xl border border-white/15 bg-slate-800 text-xs font-semibold text-slate-100 transition hover:bg-white hover:text-slate-950"
             >
               Logout
@@ -134,6 +140,32 @@ function Sidebar({ activeSection, onSectionChange, currentUser, onLogout }) {
           </p>
         ) : null}
       </div>
+
+      {logoutConfirmOpen ? (
+        <div className="absolute bottom-5 left-[calc(100%+10px)] z-50 w-64 rounded-2xl border border-slate-200 bg-white p-3 text-slate-900 shadow-2xl shadow-slate-950/20">
+          <div className="absolute -left-1.5 bottom-8 size-3 rotate-45 border-b border-l border-slate-200 bg-white" />
+          <div className="relative">
+            <div className="text-sm font-semibold text-slate-950">Logout?</div>
+            <p className="mt-1 text-xs leading-5 text-slate-500">Are you sure you want to logout?</p>
+            <div className="mt-3 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setLogoutConfirmOpen(false)}
+                className="h-8 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmLogout}
+                className="h-8 rounded-lg bg-orange-600 px-3 text-xs font-semibold text-white transition hover:bg-orange-700"
+              >
+                Yes
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </aside>
   )
 }

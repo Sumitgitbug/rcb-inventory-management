@@ -1,30 +1,9 @@
+console.log("ACTION BUTTON UPDATED")
 import { Upload } from "lucide-react"
 import Modal from "@/components/Modal"
+import { ActionButton } from "@/components/dashboard-ui"
 import { getCategoriesForType, getTypeOptions } from "@/data/inventoryCatalog"
 
-function ActionButton({ children, style = {}, ...props }) {
-  return (
-    <button
-      type="button"
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: "8px",
-        border: "none",
-        borderRadius: "999px",
-        padding: "8px 16px",
-        fontSize: "14px",
-        fontWeight: 500,
-        cursor: "pointer",
-        transition: "opacity 0.15s",
-        ...style,
-      }}
-      {...props}
-    >
-      {children}
-    </button>
-  )
-}
 
 function AddAssetModal({
   open,
@@ -54,7 +33,7 @@ function AddAssetModal({
       <form className="space-y-5" onSubmit={onSubmit}>
         <div className="grid gap-4 md:grid-cols-2">
           <div className="grid gap-2">
-            <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center just y-between gap-3">
               <span className="text-sm font-medium text-slate-700">Type</span>
               <button type="button" className="text-xs font-medium text-orange-600 hover:text-orange-900" onClick={() => onOpenCatalogModal("type")}>
                 + Add

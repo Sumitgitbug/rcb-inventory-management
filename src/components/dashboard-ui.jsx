@@ -1,4 +1,4 @@
-function ActionButton({ children, style, ...props }) {
+function ActionButton({ children, style = {}, ...props }) {
   return (
     <button
       type="button"
@@ -6,8 +6,6 @@ function ActionButton({ children, style, ...props }) {
         display: "inline-flex",
         alignItems: "center",
         gap: "8px",
-        backgroundColor: "#f04405",
-        color: "#ffffff",
         border: "none",
         borderRadius: "999px",
         padding: "8px 16px",
@@ -51,7 +49,7 @@ function StatCard({ label, value, icon }) {
   )
 }
 
-function SectionShell({ title, description, action, children, contentClassName = "" }) {
+function SectionShell({ title, description, action, children }) {
   return (
     <div className="flex h-full flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
       <div className="flex-none border-b border-slate-200 px-6 py-5">
@@ -63,7 +61,7 @@ function SectionShell({ title, description, action, children, contentClassName =
           {action ? <div className="flex shrink-0">{action}</div> : null}
         </div>
       </div>
-      <div className={["flex min-h-0 flex-1 flex-col px-6 py-6", contentClassName].filter(Boolean).join(" ")}>{children}</div>
+      <div className="flex-1 min-h-0 px-6 py-6">{children}</div>
     </div>
   )
 }

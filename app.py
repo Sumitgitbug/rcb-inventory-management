@@ -285,11 +285,17 @@ def _ensure_schema() -> None:
                 serial_number VARCHAR(190) DEFAULT '',
                 status_name VARCHAR(30) NOT NULL DEFAULT 'issued',
                 return_date DATE NULL,
+                transfer_history LONGTEXT,
                 created_at DATETIME NOT NULL,
                 updated_at DATETIME NOT NULL
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """
         )
+        try:
+            cursor.execute("ALTER TABLE issues ADD COLUMN transfer_history LONGTEXT")
+        except mysql.connector.Error as exc:
+            if exc.errno != 1060:
+                raise
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS notes (
@@ -363,6 +369,33 @@ def _normalize_allowed_types(value) -> list[str]:
             continue
         seen.add(text)
         normalized.append(text)
+    return normalized
+
+
+def _normalize_transfer_history(value) -> list[dict]:
+    if value in (None, ""):
+        return []
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            return []
+    if not isinstance(value, list):
+        return []
+
+    normalized = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        normalized.append(
+            {
+                "id": str(item.get("id") or ""),
+                "fromLocation": str(item.get("fromLocation") or ""),
+                "toLocation": str(item.get("toLocation") or ""),
+                "transferDate": _serialize_date(_parse_date(item.get("transferDate"))) or str(item.get("transferDate") or ""),
+                "createdAt": _serialize_datetime(_parse_datetime(item.get("createdAt"))),
+            }
+        )
     return normalized
 
 
@@ -754,7 +787,7 @@ def _load_state():
         cursor.execute(
             """
             SELECT issue_uid, asset_id, employee_id, employee_code, employee_name, employee_email,
-                   location_name, issue_date, serial_number, status_name, return_date,
+                   location_name, issue_date, serial_number, status_name, return_date, transfer_history,
                    created_at, updated_at
             FROM issues
             ORDER BY created_at DESC
@@ -774,6 +807,7 @@ def _load_state():
                 "serialNumber": row["serial_number"] or "",
                 "status": _normalize_status(row["status_name"]),
                 "returnDate": _serialize_date(row["return_date"]),
+                "transferHistory": _normalize_transfer_history(row.get("transfer_history")),
                 "createdAt": _serialize_datetime(row["created_at"]),
                 "updatedAt": _serialize_datetime(row["updated_at"]),
             }
@@ -892,8 +926,8 @@ def _save_state(state):
                 """
                 INSERT INTO issues (
                     issue_uid, asset_id, employee_id, employee_code, employee_name, employee_email,
-                    location_name, issue_date, serial_number, status_name, return_date, created_at, updated_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    location_name, issue_date, serial_number, status_name, return_date, transfer_history, created_at, updated_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     issue["id"],
@@ -907,6 +941,7 @@ def _save_state(state):
                     issue.get("serialNumber", ""),
                     _normalize_status(issue.get("status", "issued")) or "issued",
                     _parse_date(issue.get("returnDate")),
+                    json.dumps(_normalize_transfer_history(issue.get("transferHistory"))),
                     _parse_datetime(issue.get("createdAt")),
                     _parse_datetime(issue.get("updatedAt")),
                 ),

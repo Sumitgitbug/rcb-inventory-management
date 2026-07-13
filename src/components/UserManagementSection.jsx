@@ -8,7 +8,7 @@ import { createUser, deleteUser, loadUsers, resetUserPassword, updateUser } from
 
 const emptyUserForm = { fullName: "", username: "", password: "", role: "user", allowedTypes: [] }
 
-function UserManagementSection({ currentUser, catalog }) {
+function UserManagementSection({ currentUser, catalog, onOpenCatalogModal }) {
   const [users, setUsers] = useState([])
   const [form, setForm] = useState(emptyUserForm)
   const [resetPasswords, setResetPasswords] = useState({})
@@ -285,7 +285,19 @@ function UserManagementSection({ currentUser, catalog }) {
           </label>
           {form.role === "user" ? (
             <div className="grid gap-2">
-              <span className="text-sm font-medium text-slate-700">Allowed Inventory Type</span>
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-sm font-medium text-slate-700">Allowed Inventory Type</span>
+                {onOpenCatalogModal ? (
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1 text-xs font-semibold text-orange-600 hover:text-orange-800"
+                    onClick={() => onOpenCatalogModal("type")}
+                  >
+                    <Plus className="size-3.5" />
+                    Add
+                  </button>
+                ) : null}
+              </div>
               <Select
                 value={form.allowedTypes[0] || ""}
                 onValueChange={(value) => setForm((current) => ({ ...current, allowedTypes: [value] }))}

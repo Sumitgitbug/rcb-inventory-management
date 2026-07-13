@@ -8,7 +8,7 @@ function EmployeesSection({ employees, onAddEmployee, onEditEmployee, onRemoveEm
       description="Employee code, employee name, and email."
       action={
         onAddEmployee ? (
-          <ActionButton onClick={onAddEmployee}>
+          <ActionButton onClick={onAddEmployee} className="!bg-orange-600 !text-white hover:!bg-orange-700">
             <Plus className="size-4" />
             Add Employee
           </ActionButton>
@@ -36,14 +36,22 @@ function EmployeesSection({ employees, onAddEmployee, onEditEmployee, onRemoveEm
                     <td className="px-4 py-4 text-slate-700">
                       <div className="flex gap-2">
                         {onEditEmployee ? (
-                          <ActionButton className="px-3 py-1.5 text-xs" onClick={() => onEditEmployee(employee)}>
+                          <button
+                            type="button"
+                            className="rounded-lg bg-green-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-green-700"
+                            onClick={() => onEditEmployee(employee)}
+                          >
                             Edit
-                          </ActionButton>
+                          </button>
                         ) : null}
                         {onRemoveEmployee ? (
-                          <ActionButton className="bg-rose-500 px-3 py-1.5 text-xs hover:bg-rose-600" onClick={() => onRemoveEmployee(employee.id)}>
+                          <button
+                            type="button"
+                            className="rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-rose-700"
+                            onClick={() => onRemoveEmployee(employee.id)}
+                          >
                             Delete
-                          </ActionButton>
+                          </button>
                         ) : null}
                       </div>
                     </td>
